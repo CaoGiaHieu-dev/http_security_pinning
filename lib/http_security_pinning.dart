@@ -54,8 +54,7 @@ class NoValidPinsFoundException extends CertificatePinningException {
 /// against the provided pins, and creating a [SecurityContext].
 class _HttpSecurityPinningService {
   static const String _tag = "HttpSecurityPinningClient";
-  static const MethodChannel _channel =
-      MethodChannel('http_security_pinning');
+  static const MethodChannel _channel = MethodChannel('http_security_pinning');
 
   /// A cache of host certificates to avoid re-fetching on every request.
   static final Map<String, List<Uint8List>> _hostCertificates =
@@ -83,9 +82,11 @@ class _HttpSecurityPinningService {
           final List<Object?>? fetchedHostCertificates = await _channel
               .invokeMethod('fetchHostCertificates', arguments)
               .timeout(timeout +
-                  const Duration(seconds: 1)); // Add a grace period to the Dart timeout
+                  const Duration(
+                      seconds: 1)); // Add a grace period to the Dart timeout
 
-          if (fetchedHostCertificates == null || fetchedHostCertificates.isEmpty) {
+          if (fetchedHostCertificates == null ||
+              fetchedHostCertificates.isEmpty) {
             throw CertificateFetchException(
                 'Native method returned no certificates.');
           }

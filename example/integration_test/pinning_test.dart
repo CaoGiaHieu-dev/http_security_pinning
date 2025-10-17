@@ -15,17 +15,20 @@ void main() {
   group('HttpSecurityPinningClient Integration Tests', () {
     testWidgets('should succeed with correct pin', (WidgetTester tester) async {
       // Arrange
-      final secureClient = IOClient(HttpSecurityPinningClient(
-        [githubPin],
-        // Using new constructor with default timeout and retries
-        timeout: const Duration(seconds: 10),
-        retryCount: 2,
-      ));
+      final secureClient = IOClient(
+        HttpSecurityPinningClient(
+          [githubPin],
+          // Using new constructor with default timeout and retries
+          timeout: const Duration(seconds: 10),
+          retryCount: 2,
+        ),
+      );
 
       // Act & Assert
       try {
-        final http.Response response =
-            await secureClient.get(Uri.parse('https://github.com'));
+        final http.Response response = await secureClient.get(
+          Uri.parse('https://github.com'),
+        );
         expect(response.statusCode, 200);
       } catch (e) {
         fail('Test failed: Should have connected successfully, but threw: $e');
@@ -35,7 +38,8 @@ void main() {
     testWidgets('should fail with incorrect pin', (WidgetTester tester) async {
       // Arrange
       final secureClient = IOClient(
-          HttpSecurityPinningClient(['dGVzdA=='])); // Valid Base64, but incorrect pin
+        HttpSecurityPinningClient(['dGVzdA==']),
+      ); // Valid Base64, but incorrect pin
 
       // Act & Assert
       expect(
@@ -50,36 +54,44 @@ void main() {
 
       // Act & Assert
       try {
-        final http.Response response =
-            await secureClient.get(Uri.parse('https://google.com'));
+        final http.Response response = await secureClient.get(
+          Uri.parse('https://google.com'),
+        );
         expect(response.statusCode, 200);
       } catch (e) {
         fail(
-            'Test failed: Should have connected successfully without pins, but threw: $e');
+          'Test failed: Should have connected successfully without pins, but threw: $e',
+        );
       }
     });
 
-    testWidgets('should fail to connect to a bad certificate host',
-        (WidgetTester tester) async {
+    testWidgets('should fail to connect to a bad certificate host', (
+      WidgetTester tester,
+    ) async {
       // Arrange
       final secureClient = IOClient(HttpSecurityPinningClient([]));
 
       // Act & Assert
       expect(
-        () async => await secureClient
-            .get(Uri.parse('https://self-signed.badssl.com/')),
+        () async => await secureClient.get(
+          Uri.parse('https://self-signed.badssl.com/'),
+        ),
         throwsA(isA<HandshakeException>()),
       );
     });
 
-    testWidgets('should fail with a short timeout', (WidgetTester tester) async {
+    testWidgets('should fail with a short timeout', (
+      WidgetTester tester,
+    ) async {
       // Arrange
       HttpSecurityPinningClient.clearCache(); // Clear cache to ensure a network request is made
-      final secureClient = IOClient(HttpSecurityPinningClient(
-        [githubPin], // Pin is correct, but timeout is too short
-        timeout: const Duration(milliseconds: 1),
-        retryCount: 1, // Allow one retry
-      ));
+      final secureClient = IOClient(
+        HttpSecurityPinningClient(
+          [githubPin], // Pin is correct, but timeout is too short
+          timeout: const Duration(milliseconds: 1),
+          retryCount: 1, // Allow one retry
+        ),
+      );
 
       // Act & Assert
       expect(
