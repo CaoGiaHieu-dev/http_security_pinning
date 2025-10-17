@@ -161,5 +161,5 @@ try {
 
 ## Additional Information
 
-- **Repository**: Find the source code on [GitHub](https://github.com/CaoGiaHieu-dev/http_security_pinning.git).
-- **Issue Tracker**: Report bugs and request features on the [issue tracker](https://github.com/CaoGiaHieu-dev/http_security_pinning.git/issues).
+- **Repository**: Find the source code on [GitHub](https://github.com/CaoGiaHieu-dev/http_security_pinning).
+- **Issue Tracker**: Report bugs and request features on the [issue tracker](https://github.com/CaoGiaHieu-dev/http_security_pinning/issues).
