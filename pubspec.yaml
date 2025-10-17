@@ -1,7 +1,7 @@
 name: http_security_pinning
 description: An implementation of Dart's HttpClient with certificate pinning against SPKI hashes.
 version: 1.0.0
-repository: https://github.com/hieucg/http_security_pinning
+repository: https://github.com/CaoGiaHieu-dev/http_security_pinning.git
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

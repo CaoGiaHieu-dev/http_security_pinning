@@ -8,7 +8,7 @@ A Flutter plugin that uses certificate pinning via SPKI hashes.
   s.license          = { :type => 'MIT', :file => '../LICENSE' }
   s.author           = { 'Cao Gia Hieu' => 'caogiahieu99@gmail.com' }
   s.source           = { :path => '.' }
-  s.homepage         = 'https://github.com/hieucg/http_security_pinning'
+  s.homepage         = 'https://github.com/CaoGiaHieu-dev/http_security_pinning.git'
   s.source_files = 'Classes/**/*'
   s.public_header_files = 'Classes/**/*.h'
   s.dependency 'Flutter'
