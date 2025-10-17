@@ -1,0 +1,39 @@
+name: http_security_pinning
+description: An implementation of Dart's HttpClient with certificate pinning against SPKI hashes.
+version: 1.0.0
+repository: https://github.com/hieucg/http_security_pinning
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.27.1"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  asn1lib: ^1.6.5
+  crypto: ^3.0.6
+  pem: ^2.0.5
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter.
+flutter:
+  # This section identifies this Flutter project as a plugin project.
+  # The 'pluginClass' and Android 'package' identifiers should not ordinarily
+  # be modified. They are used by the tooling to maintain consistency when
+  # adding or updating assets for this project.
+  plugin:
+    platforms:
+      android:
+        package: dev.hieucg.http_security_pinning
+        pluginClass: HttpSecurityPinningPlugin
+      ios:
+        pluginClass: HttpSecurityPinningPlugin
