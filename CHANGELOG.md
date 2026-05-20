@@ -1,3 +1,7 @@
+## 1.0.1
+
+* Fix android namespace
+
 ## 1.0.0
 
 * Initial public release of the `http_security_pinning` package.
