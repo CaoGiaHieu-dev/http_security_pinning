@@ -1,5 +1,5 @@
 group 'dev.hieucg.http_security_pinning'
-version '1.0'
+version '1.0.1'
 
 buildscript {
     repositories {
