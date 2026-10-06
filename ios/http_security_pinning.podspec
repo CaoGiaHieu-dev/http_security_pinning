@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'http_security_pinning'
-  s.version          = '1.2.1'
+  s.version          = '1.2.2'
   s.summary          = 'A Flutter plugin for certificate pinning with HTTP security.'
   s.description      = <<-DESC
 A Flutter plugin that uses certificate pinning via SPKI hashes.

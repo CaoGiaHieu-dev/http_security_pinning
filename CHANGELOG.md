@@ -1,3 +1,9 @@
+## 1.2.2
+
+### Licensing & Attribution
+- **Adopted BSD 3-Clause License**: Migrated from MIT License to the official BSD 3-Clause License to enforce strict author attribution, protect the author's copyright, and prohibit unauthorized name endorsement in derivative products.
+- **Source Code Copyright Headers**: Added standard Flutter/Dart SDK copyright headers across all Dart, Swift, Objective-C, and Java source files.
+
 ## 1.2.1
 
 ### Platform Support & Score Improvements
@@ -8,8 +14,6 @@
   - Isolated native `dart:io` symbols from the public library entrypoint using clean conditional web stubs (`web_stub.dart`), ensuring 100% compatibility with Flutter Web and WASM runtimes.
 - **Documentation Polish**:
   - Completed documentation comments for all public constructors and properties across caching and web security exception classes.
-- **License**:
-  - Adopted the BSD 3-Clause License to enforce strict author attribution and protect the author's copyright across all source distributions and derivative works.
 
 ## 1.2.0
 
