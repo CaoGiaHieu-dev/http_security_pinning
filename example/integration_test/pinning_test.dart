@@ -36,10 +36,12 @@ void main() {
     });
 
     testWidgets('should fail with incorrect pin', (WidgetTester tester) async {
-      // Arrange
+      // Valid 32-byte Base64 SHA-256 pin, but not matching github.com
       final secureClient = IOClient(
-        HttpSecurityPinningClient(['dGVzdA==']),
-      ); // Valid Base64, but incorrect pin
+        HttpSecurityPinningClient([
+          'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        ]),
+      );
 
       // Act & Assert
       expect(

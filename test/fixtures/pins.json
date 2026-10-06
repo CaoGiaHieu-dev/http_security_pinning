@@ -1,0 +1,9 @@
+{
+  "root_ca": "pkxmZ+2TONzz6JwpGl/qh+1XL7DIvPmWO4sa+yE2sY8=",
+  "intermediate_ca": "eHDSOkYgiJphKpIaKaW52Pn7mp0HFI9Af8AuoVP4op8=",
+  "server_a1": "6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY=",
+  "server_a2": "6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY=",
+  "server_b": "BL/ENt1pniuxdP4R9oTSx3S+59B0WwjuvTbegSTdY18=",
+  "selfsigned": "aM6o5wqKSrHYK2qU21SNTqLVYhmZyaSo85IQe+J2Y0I=",
+  "v1": "KoKYgsaExVA6DJipOJGNAOGSHRmbEBulq3dc5d0Ekz0="
+}

@@ -3,62 +3,63 @@
 [![pub version](https://img.shields.io/pub/v/http_security_pinning.svg)](https://pub.dev/packages/http_security_pinning)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-A Flutter plugin that provides a secure-by-default `HttpClient` implementation with certificate pinning against SPKI hashes.
+A Flutter plugin providing a secure-by-default, production-ready `HttpClient` implementation with Subject Public Key Info (SPKI) SHA-256 certificate pinning.
 
-This package helps prevent man-in-the-middle (MITM) attacks by ensuring your app only communicates with servers presenting a trusted certificate.
+This package defends your mobile and desktop applications against Man-In-The-Middle (MITM) attacks, rogue Certificate Authorities (CAs), and DNS spoofing by cryptographically verifying the server's public key before allowing HTTP traffic.
+
+---
 
 ## Features
 
-- **SPKI Pinning**: Pins certificates against their Subject Public Key Info (SPKI) SHA-256 hash.
-- **Easy Integration**: Works seamlessly with popular packages like `http` and `dio`.
-- **Configurable**: Set custom timeouts and retry counts for certificate fetching.
-- **Global Configuration**: Optionally apply pinning to all `HttpClient` instances in your app using `HttpOverrides`.
-- **Robust Error Handling**: Provides clear, catchable exceptions for pinning failures.
-- **Automatic Hash Logging**: Logs the certificate chain's SPKI hashes to the console to simplify setup.
+- 🛡️ **SPKI SHA-256 Pinning**: Pins cryptographic public keys rather than full certificates. Survives certificate renewals when the same key pair or intermediate CA is used.
+- 🌐 **Cross-Platform Support**: Full certificate chain inspection on Android and iOS; leaf certificate pinning on Windows, macOS, and Linux out-of-the-box.
+- 🎯 **Per-Host & Wildcard Policies**: Configure distinct pins per host (e.g., `api.example.com`, `auth.example.com`) or wildcards (`*.example.com`).
+- ⚡ **Zero-Leakage Concurrency**: Thread-safe client connection pooling and in-flight request deduplication prevent socket leaks and duplicate handshakes.
+- 🔄 **Safe Dynamic Rotation**: Automatic TLS cache invalidation and retry if server certificate rotates during app runtime.
+- 🛠️ **Seamless Integration**: Drop-in replacement for `dart:io` `HttpClient`, fully compatible with `package:http`, `package:dio`, and `HttpOverrides.global`.
+- 🔍 **Diagnostics & Bad Certificate Callback**: Pin validation failures surface to `badCertificateCallback` with a `PresentedCertificate` object (implementing `dart:io` `X509Certificate`) for detailed logging and diagnostics. Controlled debug bypass via opt-in `honorBadCertificateCallback: true`.
+- ⏱️ **Exponential Backoff Retries**: Configurable timeouts and exponential backoff retry policy for flaky networks.
+
+---
 
 ## Supported Platforms
 
-This plugin is currently available for the following platforms:
+| Platform | Support | Mechanism | Chain Depth |
+| :--- | :---: | :--- | :--- |
+| **Android** | ✅ API 21+ | Native TLS probe (`SSLSocket`) | Full chain (Leaf, Intermediate, Root) |
+| **iOS** | ✅ iOS 12.0+ | Native TLS probe (`NSURLSession` + `SecTrust`) | Full chain (Leaf, Intermediate, Root) |
+| **macOS** | ✅ macOS 10.15+ | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
+| **Windows** | ✅ Windows 10+ | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
+| **Linux** | ✅ Any modern distro | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
+| **Web** | ⚠️ Not supported | Browser sandbox does not permit raw socket pinning | Throws `UnsupportedError` |
 
-- ✅ **Android** (API 19+)
-- ✅ **iOS** (iOS 10.0+)
+> [!NOTE]
+> On desktop platforms (Windows, macOS, Linux), `dart:io` exposes the presented leaf certificate. Leaf and public key pinning work identically across desktop and mobile. If you require intermediate or root CA pinning on desktop, ensure your server sends the intermediate chain or use mobile platforms.
+>
+> You can check `HttpSecurityPinningClient.isSupported` at runtime, which returns `true` on Android, iOS, Windows, macOS, and Linux, and `false` on Web.
+
+---
 
 ## Getting Started
 
-Add the package to your `pubspec.yaml`:
+Add the dependency to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  http_security_pinning: ^1.0.0 # Replace with the latest version
+  http_security_pinning: ^1.1.0
 ```
 
-Then, run `flutter pub get`.
+Then run:
 
-## Usage
-
-The easiest way to use this package is to create an instance of `HttpSecurityPinningClient`.
-
-### Configuration
-
-You can configure the client with a specific timeout for fetching certificates and a retry count.
-
-```dart
-final secureClient = HttpSecurityPinningClient(
-  ["YOUR_SPKI_HASH_HERE"],
-  timeout: const Duration(seconds: 15), // Default is 10 seconds
-  retryCount: 2, // Default is 3
-);
+```bash
+flutter pub get
 ```
 
-### Finding Your SPKI Hash
+---
 
-To get the SPKI hash for your server, make a request using the client without any pins (or with an incorrect pin). The client will fail the connection but will log all SPKI hashes from the server's certificate chain to the debug console. Look for a line like:
+## Quick Start
 
-`I/HttpSecurityPinningClient(12345): Certificate chain for your.domain.com: [HASH_1], [HASH_2], ...`
-
-Copy the correct hash and add it to your list of pins.
-
-### With `package:http`
+### 1. Simple Single-Host Pinning
 
 ```dart
 import 'package:http/http.dart' as http;
@@ -66,100 +67,251 @@ import 'package:http/io_client.dart';
 import 'package:http_security_pinning/http_security_pinning.dart';
 
 void main() async {
-  final secureClient = IOClient(HttpSecurityPinningClient(
-    ["e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY="], // github.com's SPKI hash
-  ));
+  // Pass one or more SPKI SHA-256 hashes (base64 or sha256/... format)
+  final client = HttpSecurityPinningClient([
+    'e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=', // Primary pin
+    'k2v657xBsOVe1PQR/JU7tNm+hmd2h0EtTV0mbJ5De+o=', // Backup / rotation pin
+  ]);
+
+  final ioClient = IOClient(client);
 
   try {
-    final response = await secureClient.get(Uri.parse('https://github.com'));
-    print('SUCCESS: ${response.statusCode}');
-  } catch (e) {
-    print('ERROR: $e');
+    final response = await ioClient.get(Uri.parse('https://github.com'));
+    print('Status: ${response.statusCode}');
+  } finally {
+    ioClient.close();
   }
 }
 ```
 
-### With `package:dio`
+---
+
+### 2. Multi-Host Pinning with Wildcards
+
+Use `HttpSecurityPinningClient.perHost` when your application communicates with multiple backends or third-party APIs:
+
+```dart
+final client = HttpSecurityPinningClient.perHost(
+  {
+    // Exact host match
+    'api.example.com': [
+      '6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY=',
+    ],
+    // Wildcard match for all subdomains
+    '*.cdn.example.com': [
+      'eHDSOkYgiJphKpIaKaW52Pn7mp0HFI9Af8AuoVP4op8=',
+    ],
+  },
+  allowUnpinnedHosts: false, // Default is false: blocks unpinned hosts
+  timeout: const Duration(seconds: 15),
+  retryCount: 2,
+);
+```
+
+---
+
+### 3. Usage with `Dio`
+
+For `dio` 5.x+, configure `createHttpClient` on `IOHttpClientAdapter`:
 
 ```dart
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:http_security_pinning/http_security_pinning.dart';
 
 void main() async {
   final dio = Dio();
-  (dio.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate = (client) {
-    return HttpSecurityPinningClient(
-      ["e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY="], // github.com's SPKI hash
-    );
+
+  (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+    return HttpSecurityPinningClient([
+      'e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=',
+    ]);
   };
 
-  try {
-    final response = await dio.get('https://github.com');
-    print('SUCCESS: ${response.statusCode}');
-  } catch (e) {
-    print('ERROR: $e');
-  }
+  final response = await dio.get('https://github.com');
+  print('Status code: ${response.statusCode}');
 }
 ```
 
-## Advanced Usage: Global Pinning
+---
 
-For a cleaner approach that applies pinning to all `HttpClient` requests in your app, you can use `HttpOverrides`. This is useful for ensuring all network traffic is secure without modifying every request call site.
+### 4. Global Pinning with `HttpOverrides`
 
-1.  Create a custom `HttpOverrides` class:
+Apply SPKI pinning transparently across all `HttpClient` calls in your app (including image loading and third-party libraries) without modifying individual request call sites:
 
 ```dart
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:http_security_pinning/http_security_pinning.dart';
 
-class MyHttpOverrides extends HttpOverrides {
+class SecureHttpOverrides extends HttpOverrides {
   final List<String> pins;
-  MyHttpOverrides(this.pins);
+  SecureHttpOverrides(this.pins);
 
   @override
   HttpClient createHttpClient(SecurityContext? context) {
-    // Note: Timeout and retry parameters can also be passed here
-    return HttpSecurityPinningClient(pins);
+    return HttpSecurityPinningClient(
+      pins,
+      timeout: const Duration(seconds: 10),
+      retryCount: 2,
+    );
   }
 }
-```
 
-2.  Install it once in your `main()` function:
-
-```dart
 void main() {
-  HttpOverrides.global = MyHttpOverrides([
-    "e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=", // github.com's SPKI hash
+  HttpOverrides.global = SecureHttpOverrides([
+    'e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=',
   ]);
 
-  runApp(MyApp());
+  runApp(const MyApp());
 }
 ```
 
-Now, all standard `http.get()`, `dio.get()`, etc., calls will automatically use the pinning logic.
+> [!NOTE]
+> `HttpSecurityPinningClient` internally isolates its internal connections from `HttpOverrides.global`, preventing infinite recursion / `StackOverflowError`.
+
+---
+
+## How to Obtain Your SPKI Hash
+
+### Option A: Using OpenSSL (Recommended)
+
+Run the following command in terminal to extract the leaf certificate's SPKI SHA-256 hash:
+
+```bash
+openssl s_client -servername example.com -connect example.com:443 </dev/null 2>/dev/null \
+  | openssl x509 -pubkey -noout \
+  | openssl pkey -pubin -outform der \
+  | openssl dgst -sha256 -binary \
+  | openssl enc -base64
+```
+
+### Option B: Automatic Hash Discovery via Debug Logs
+
+Run a test request with an empty pin list or a placeholder pin. In debug mode, `HttpSecurityPinningClient` prints the SPKI SHA-256 hashes of all certificates presented by the server:
+
+```text
+HttpSecurityPinning: Certificate chain for example.com:
+  [0] 6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY= (Leaf)
+  [1] eHDSOkYgiJphKpIaKaW52Pn7mp0HFI9Af8AuoVP4op8= (Intermediate)
+  [2] pkxmZ+2TONzz6JwpGl/qh+1XL7DIvPmWO4sa+yE2sY8= (Root)
+```
+
+Copy the desired hash into your configuration.
+
+---
+
+## Handling `badCertificateCallback`
+
+When a server certificate fails SPKI verification or OS handshake verification, `HttpSecurityPinningClient` invokes `badCertificateCallback` with a `PresentedCertificate` object implementing `dart:io` `X509Certificate`.
+
+### Inspecting Failed Certificates for Diagnostics
+
+```dart
+final client = HttpSecurityPinningClient(['EXPECTED_PIN_HASH']);
+
+client.badCertificateCallback = (cert, host, port) {
+  print('Pinning failed for $host:$port');
+  print('Subject: ${cert.subject}');
+  print('Issuer: ${cert.issuer}');
+  print('Valid: ${cert.startValidity} to ${cert.endValidity}');
+  print('SHA-1: ${cert.sha1.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':')}');
+  print('PEM:\n${cert.pem}');
+
+  // By default, returning true or false here logs information,
+  // but connection STILL FAILS with NoValidPinsFoundException (secure-by-default).
+  return false;
+};
+```
+
+### Debug Bypass Mode (`honorBadCertificateCallback: true`)
+
+If you want `badCertificateCallback` return value to actually override pinning failure (e.g. in development environments or test proxies like Charles/Proxyman):
+
+```dart
+final client = HttpSecurityPinningClient(
+  ['EXPECTED_PIN_HASH'],
+  honorBadCertificateCallback: true, // ⚠️ Opt-in override
+);
+
+client.badCertificateCallback = (cert, host, port) {
+  // Return true ONLY for trusted local debug environments!
+  if (kDebugMode && host == 'staging.local') {
+    return true; // Connection allowed despite pin mismatch
+  }
+  return false; // Connection rejected
+};
+```
+
+> [!CAUTION]
+> Setting `honorBadCertificateCallback: true` and returning `true` completely disables MITM protection for that request. Never enable this unconditionally in release builds!
+
+---
 
 ## Error Handling
 
-This package throws specific exceptions to allow for fine-grained error handling.
-
-- `NoValidPinsFoundException`: Thrown if the server's certificates are fetched successfully but none match the provided pins.
-- `CertificateFetchException`: Thrown if there is a problem fetching the certificate chain from the server (e.g., a network error or timeout).
+All exceptions inherit from `CertificatePinningException`:
 
 ```dart
-import 'package:http_security_pinning/exceptions.dart';
+import 'package:http_security_pinning/http_security_pinning.dart';
 
 try {
-  // Your request...
+  final response = await client.getUrl(Uri.parse('https://example.com'));
 } on NoValidPinsFoundException catch (e) {
-  print('Pinning validation failed for ${e.host}: ${e.message}');
+  // MITM attack detected or pins are out of date!
+  print('Pin mismatch on ${e.host}:${e.port}');
+  print('Configured pins: ${e.expectedPins}');
+  print('Observed pins from server: ${e.observedPins}');
 } on CertificateFetchException catch (e) {
-  print('Failed to fetch certificates: ${e.message}');
+  // Network failure or timeout while probing certificates
+  print('Failed to probe certificate: ${e.message} (Retryable: ${e.isRetryable})');
+} on UnpinnedHostException catch (e) {
+  // Host was not defined in perHost policy and allowUnpinnedHosts is false
+  print('Host ${e.host} is not allowed');
+} on InvalidPinException catch (e) {
+  // Malformed pin provided in configuration (e.g. wrong base64 length)
+  print('Invalid pin format: ${e.message}');
 } catch (e) {
-  print('A generic error occurred: $e');
+  print('Other error: $e');
 }
 ```
 
-## Additional Information
+---
 
-- **Repository**: Find the source code on [GitHub](https://github.com/CaoGiaHieu-dev/http_security_pinning).
-- **Issue Tracker**: Report bugs and request features on the [issue tracker](https://github.com/CaoGiaHieu-dev/http_security_pinning/issues).
+## Configuration Reference
+
+### `HttpSecurityPinningClient`
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `pins` | `List<String>` | required | List of SPKI SHA-256 hashes for all hosts. |
+| `timeout` | `Duration` | `10s` | Network timeout for probing certificate chains. |
+| `retryCount` | `int` | `3` | Max retry attempts upon probe failure. |
+| `retryDelay` | `Duration` | `500ms` | Base exponential backoff delay between retries. |
+| `honorBadCertificateCallback` | `bool` | `false` | If `true`, returning `true` from `badCertificateCallback` bypasses pin mismatch. |
+| `onLog` | `void Function(String)?` | `null` | Optional custom logger callback. |
+
+### `HttpSecurityPinningClient.perHost`
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `pinsByHost` | `Map<String, List<String>>` | required | Map of host patterns (`api.example.com` or `*.example.com`) to pins. |
+| `allowUnpinnedHosts` | `bool` | `false` | When `true`, requests to hosts not in `pinsByHost` bypass pinning instead of failing. |
+| `timeout` | `Duration` | `10s` | Network timeout for probing certificate chains. |
+| `retryCount` | `int` | `3` | Max retry attempts upon probe failure. |
+| `retryDelay` | `Duration` | `500ms` | Base exponential backoff delay between retries. |
+| `honorBadCertificateCallback` | `bool` | `false` | Debug bypass flag. |
+
+---
+
+## Best Practices for Certificate Pinning
+
+1. **Always Pin Multiple Keys**: Pin at least the current leaf key and a backup intermediate or offline leaf key. This prevents application downtime during emergency certificate re-issuance.
+2. **Prefer SPKI Over Leaf Certificate Pinning**: SPKI hashes pin only the public key. When renewing your TLS certificate with the Certificate Signing Request (CSR) created with the same private key, the SPKI hash remains identical.
+3. **Use Per-Host Policies**: Separate pins for third-party endpoints (e.g. Payment Gateway, OAuth provider) from your own API endpoints.
+
+---
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
