@@ -1,3 +1,30 @@
+## 1.1.0
+
+### Security & Architecture Improvements
+- **Infinite Recursion Prevention**: Solved `StackOverflowError` when `HttpOverrides.global` is installed by running internal delegate clients in an isolated context using `HttpOverrides.runWithHttpOverrides(..., _NoHttpOverrides())`.
+- **Dynamic Certificate Renewal & Cache Invalidation**:
+  - Automatically evicts negative and failed cache entries upon TLS handshake errors.
+  - Automatically invalidates cached security context and retries once upon `HandshakeException`, seamlessly supporting server certificate rotation without application restart.
+- **Thread-Safe Multi-Host Connection Pooling**: Replaced single shared client instance with an asynchronous client connection pool keyed by `host:port`, preventing premature client disposal, race conditions, and socket leaks across concurrent requests.
+- **Robust X.509 ASN.1 Parsing**: Enhanced SPKI DER parser to properly handle the optional `[0]` version tag per RFC 5280, supporting X.509 v1, v2, and v3 certificates without index out-of-bounds errors.
+- **Modular Architecture**: Restructured codebase into clean domain modules (`client`, `core`, `crypto`, `fetcher`, `service`) with unidirectional dependencies.
+
+### New Features & Enhancements
+- **Certificate Inspection & `badCertificateCallback` Integration**:
+  - Surface failed or unpinned certificates directly to `HttpClient.badCertificateCallback` via a new `PresentedCertificate` class that implements `dart:io` `X509Certificate` (providing access to `der`, `sha1`, `pem`, `subject`, `issuer`, and validity dates).
+  - Added opt-in `honorBadCertificateCallback` parameter (defaults to `false` for fail-safe security), allowing developers to inspect presented certificates or bypass pinning in local development and proxy debugging environments.
+- **Desktop Platforms Support**: Added out-of-the-box support for Windows, macOS, and Linux using a pure-Dart leaf certificate probe (`DartIoCertificateFetcher`).
+- **Web Platform Stub**: Added clean web platform stub with clear `UnsupportedError` explanation and `HttpSecurityPinningClient.isSupported` runtime check.
+- **Per-Host & Wildcard Pin Policies**: Introduced `HttpSecurityPinningClient.perHost` and `PinPolicy` supporting distinct pin sets for individual hosts or wildcard subdomains (`*.example.com`).
+- **Flexible SPKI Pin Formats**: Supported standard base64, unpadded base64, URL-safe base64, and `sha256/` / `sha256=` prefixes with constant-time cryptographic verification.
+- **Native Platform Robustness**:
+  - **Android**: Direct `SSLSocket` probe with dedicated background thread queue and configurable connection/read timeouts, without dependency on Android system CA store.
+  - **iOS**: Upgraded to bounded timeout semaphore wait, ephemeral session configuration, and `SecTrustCopyCertificateChain` (iOS 15+) with backward-compatible fallback.
+- **Zero Third-Party PEM Dependencies**: Replaced external `pem` package with native standard library base64 encoding.
+
+### Testing
+- Comprehensive unit and component test suite covering OpenSSL-verified cryptographic fixtures, local loopback HTTPS servers, TLS renewals, multi-host concurrency, and certificate callback diagnostics (81 tests passing with 94.2% code coverage).
+
 ## 1.0.1
 
 * Fix android namespace
@@ -5,15 +32,3 @@
 ## 1.0.0
 
 * Initial public release of the `http_security_pinning` package.
-
-**Features**
-
-* **SPKI Pinning**: Provides an `HttpClient` implementation that enforces certificate pinning against SPKI hashes to prevent MITM attacks.
-* **Easy Integration**: Works seamlessly with popular packages like `http` and `dio`.
-* **Configurable**: Set custom `timeout` and `retryCount` for the certificate fetching process.
-* **Global Configuration**: Optionally apply pinning to all `HttpClient` instances in your app using `HttpOverrides`.
-* **Robust Error Handling**: Provides clear, catchable exceptions (`CertificateFetchException`, `NoValidPinsFoundException`) for pinning failures.
-* **Automatic Hash Logging**: Logs the certificate chain's SPKI hashes to the console to simplify setup.
-* **Comprehensive Testing**: Includes a full integration test suite.
-* **Full Documentation**: Includes a detailed README, API documentation, and a complete example app.
-* **Platform Support**: Supports Android (API 19+) and iOS (10.0+).
