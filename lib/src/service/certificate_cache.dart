@@ -8,6 +8,9 @@ import 'dart:typed_data';
 /// * Entries are removed with [invalidate] when a chain turns out to be
 ///   unusable (pin mismatch, or a TLS failure after a certificate renewal).
 class CertificateChainCache {
+  /// Creates a new in-memory [CertificateChainCache] instance.
+  CertificateChainCache();
+
   /// The cache shared by every client that uses the default fetcher.
   static final CertificateChainCache shared = CertificateChainCache();
 

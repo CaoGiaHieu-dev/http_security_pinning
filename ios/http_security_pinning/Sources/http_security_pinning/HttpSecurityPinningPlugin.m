@@ -1,4 +1,4 @@
-#import "HttpSecurityPinningPlugin.h"
+#import "include/HttpSecurityPinningPlugin.h"
 
 // Definition for a special class to fetch host certificates by implementing a NSURLSessionTaskDelegate
 // that is called upon initial connection to get the certificates but the connection is dropped at that point.

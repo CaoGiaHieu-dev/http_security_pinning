@@ -19,14 +19,17 @@ class SignatureVerificationException extends WebSecurityException {
 /// Thrown when required security headers (e.g. X-Server-Signature or X-Signature-Timestamp)
 /// are missing from the server response.
 class MissingSecurityHeaderException extends WebSecurityException {
+  /// The name of the missing security header.
   final String headerName;
 
+  /// Creates a [MissingSecurityHeaderException] indicating [headerName] was not found.
   MissingSecurityHeaderException(this.headerName)
       : super('Missing required security header: $headerName');
 }
 
 /// Thrown when a security header contains an unparseable or invalid value format.
 class MalformedSecurityHeaderException extends WebSecurityException {
+  /// Creates a [MalformedSecurityHeaderException] with the given error [message].
   const MalformedSecurityHeaderException(super.message);
 }
 

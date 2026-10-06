@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'http_security_pinning'
-  s.version          = '1.2.0'
+  s.version          = '1.2.1'
   s.summary          = 'A Flutter plugin for certificate pinning with HTTP security.'
   s.description      = <<-DESC
 A Flutter plugin that uses certificate pinning via SPKI hashes.
@@ -9,8 +9,8 @@ A Flutter plugin that uses certificate pinning via SPKI hashes.
   s.author           = { 'Cao Gia Hieu' => 'caogiahieu99@gmail.com' }
   s.source           = { :path => '.' }
   s.homepage         = 'https://github.com/CaoGiaHieu-dev/http_security_pinning'
-  s.source_files = 'Classes/**/*'
-  s.public_header_files = 'Classes/**/*.h'
+  s.source_files = 'http_security_pinning/Sources/http_security_pinning/**/*.{h,m}'
+  s.public_header_files = 'http_security_pinning/Sources/http_security_pinning/include/**/*.h'
   s.dependency 'Flutter'
   s.platform = :ios, '12.0'
   # Flutter.framework does not contain an i386 slice.
