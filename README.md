@@ -31,12 +31,12 @@ This package defends your mobile and desktop applications against Man-In-The-Mid
 | **macOS** | ✅ macOS 10.15+ | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
 | **Windows** | ✅ Windows 10+ | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
 | **Linux** | ✅ Any modern distro | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
-| **Web** | ⚠️ Not supported | Browser sandbox does not permit raw socket pinning | Throws `UnsupportedError` |
+| **Web** | ✅ Supported | Application-Layer Ed25519 Public Key Pinning & Replay Protection | Payload & Response Signature |
 
 > [!NOTE]
-> On desktop platforms (Windows, macOS, Linux), `dart:io` exposes the presented leaf certificate. Leaf and public key pinning work identically across desktop and mobile. If you require intermediate or root CA pinning on desktop, ensure your server sends the intermediate chain or use mobile platforms.
+> On mobile and desktop platforms, pinning is enforced at the TLS socket level against SPKI hashes. On Flutter Web, where browser sandboxing abstracts the underlying TLS handshake, pinning is cryptographically enforced at the application layer via **Ed25519 Response Signature Verification** and replay protection.
 >
-> You can check `HttpSecurityPinningClient.isSupported` at runtime, which returns `true` on Android, iOS, Windows, macOS, and Linux, and `false` on Web.
+> `HttpSecurityPinningClient.isSupported` returns `true` across all platforms (Android, iOS, Windows, macOS, Linux, and Web).
 
 ---
 
@@ -275,6 +275,37 @@ try {
   print('Other error: $e');
 }
 ```
+
+---
+
+## Unified Cross-Platform Usage (`UniversalSecurityClient`)
+
+For applications running across **both Mobile/Desktop and Flutter Web**, `UniversalSecurityClient` provides a drop-in `http.Client` that automatically applies the correct cryptographic protection:
+
+```dart
+import 'package:http_security_pinning/http_security_pinning.dart';
+
+final client = UniversalSecurityClient.create(
+  // Native (Mobile & Desktop): TLS SPKI Pinning
+  spkiPins: [
+    '6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY=',
+  ],
+  // Web: Server Ed25519 Public Key bytes (32 bytes)
+  serverPublicKeyBytes: [/* 32-byte Ed25519 public key */],
+);
+
+// Works transparently on Android, iOS, Windows, macOS, Linux, and Web!
+final response = await client.get(Uri.parse('https://api.example.com/data'));
+print('Status: ${response.statusCode}');
+```
+
+### Backend Setup for Web Support
+
+On Flutter Web, the client expects the server to sign response payloads using an Ed25519 private key:
+
+- `X-Server-Signature`: Base64-encoded 64-byte Ed25519 digital signature of `TimestampBytes + BodyBytes`.
+- `X-Signature-Timestamp`: Generation timestamp in milliseconds since epoch (e.g. `1728212400000`).
+- Ensure CORS exposes these headers: `Access-Control-Expose-Headers: X-Server-Signature, X-Signature-Timestamp`.
 
 ---
 

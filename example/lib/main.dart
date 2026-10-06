@@ -39,7 +39,7 @@ class _PinningHomePageState extends State<PinningHomePage> {
   final _urlController = TextEditingController(text: 'https://github.com');
   final _pinController = TextEditingController(
     text:
-        'e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=', // Correct pin for github.com
+        '/wiL5vgOLgwED41WS0DNF8QiTBVR/P41Kd163tmFxK0=', // Active pin for github.com
   );
   final _timeoutController = TextEditingController(text: '10');
   final _retryCountController = TextEditingController(text: '2');

@@ -91,6 +91,8 @@ class HttpSecurityPinningClient implements HttpClient {
     this.retryCount = 3,
     this.retryDelay = const Duration(milliseconds: 200),
     this.honorBadCertificateCallback = false,
+    Duration timestampTolerance = const Duration(minutes: 5),
+    List<int>? serverPublicKeyBytes,
     PinningService? pinningService,
   })  : _policy = PinPolicy.uniform(spkiHashes.map(SpkiPin.parse)),
         _pinningService = pinningService ?? PinningService();
@@ -109,6 +111,8 @@ class HttpSecurityPinningClient implements HttpClient {
     this.retryCount = 3,
     this.retryDelay = const Duration(milliseconds: 200),
     this.honorBadCertificateCallback = false,
+    Duration timestampTolerance = const Duration(minutes: 5),
+    List<int>? serverPublicKeyBytes,
     PinningService? pinningService,
   })  : _policy = PinPolicy.perHost(
           pinsByHost.map((k, v) => MapEntry(k, v.map(SpkiPin.parse))),
