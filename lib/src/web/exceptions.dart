@@ -1,0 +1,48 @@
+/// Exception hierarchy for Application-Layer Web Security Pinning.
+abstract class WebSecurityException implements Exception {
+  final String message;
+  const WebSecurityException(this.message);
+
+  @override
+  String toString() => '$runtimeType: $message';
+}
+
+/// Thrown when the cryptographic signature verification of the response payload fails,
+/// indicating that the payload was tampered with or does not originate from the genuine server.
+class SignatureVerificationException extends WebSecurityException {
+  const SignatureVerificationException([
+    super.message =
+        'Response signature verification failed. The payload may have been tampered with.',
+  ]);
+}
+
+/// Thrown when required security headers (e.g. X-Server-Signature or X-Signature-Timestamp)
+/// are missing from the server response.
+class MissingSecurityHeaderException extends WebSecurityException {
+  final String headerName;
+
+  MissingSecurityHeaderException(this.headerName)
+      : super('Missing required security header: $headerName');
+}
+
+/// Thrown when a security header contains an unparseable or invalid value format.
+class MalformedSecurityHeaderException extends WebSecurityException {
+  const MalformedSecurityHeaderException(super.message);
+}
+
+/// Thrown when the response timestamp is outside the acceptable tolerance window,
+/// preventing replay attacks.
+class ReplayAttackException extends WebSecurityException {
+  final int serverTimestampMs;
+  final int clientTimestampMs;
+  final Duration tolerance;
+
+  ReplayAttackException({
+    required this.serverTimestampMs,
+    required this.clientTimestampMs,
+    required this.tolerance,
+  }) : super(
+          'Response timestamp ($serverTimestampMs) differs from client time ($clientTimestampMs) '
+          'by more than the allowed tolerance of ${tolerance.inSeconds}s.',
+        );
+}

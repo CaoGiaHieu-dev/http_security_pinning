@@ -14,7 +14,12 @@
   - Surface failed or unpinned certificates directly to `HttpClient.badCertificateCallback` via a new `PresentedCertificate` class that implements `dart:io` `X509Certificate` (providing access to `der`, `sha1`, `pem`, `subject`, `issuer`, and validity dates).
   - Added opt-in `honorBadCertificateCallback` parameter (defaults to `false` for fail-safe security), allowing developers to inspect presented certificates or bypass pinning in local development and proxy debugging environments.
 - **Desktop Platforms Support**: Added out-of-the-box support for Windows, macOS, and Linux using a pure-Dart leaf certificate probe (`DartIoCertificateFetcher`).
-- **Web Platform Stub**: Added clean web platform stub with clear `UnsupportedError` explanation and `HttpSecurityPinningClient.isSupported` runtime check.
+- **Flutter Web Support (Application-Layer Public Key Pinning)**:
+  - Eliminated web stubs; fully implemented `HttpSecurityPinningClient` on Flutter Web using `Ed25519` cryptographic response signature verification (`PayloadVerifier`) and WebCrypto engine.
+  - Added anti-replay attack protection with configurable timestamp tolerance window (`timestampTolerance`).
+  - Added typed web security exceptions: `SignatureVerificationException`, `MissingSecurityHeaderException`, `ReplayAttackException`, `MalformedSecurityHeaderException`.
+- **Universal Cross-Platform Client (`UniversalSecurityClient`)**:
+  - Provides a unified factory `UniversalSecurityClient.create(...)` that automatically uses native TLS SPKI Pinning on mobile/desktop and Application-Layer Signature Pinning on Flutter Web.
 - **Per-Host & Wildcard Pin Policies**: Introduced `HttpSecurityPinningClient.perHost` and `PinPolicy` supporting distinct pin sets for individual hosts or wildcard subdomains (`*.example.com`).
 - **Flexible SPKI Pin Formats**: Supported standard base64, unpadded base64, URL-safe base64, and `sha256/` / `sha256=` prefixes with constant-time cryptographic verification.
 - **Native Platform Robustness**:
@@ -23,7 +28,7 @@
 - **Zero Third-Party PEM Dependencies**: Replaced external `pem` package with native standard library base64 encoding.
 
 ### Testing
-- Comprehensive unit and component test suite covering OpenSSL-verified cryptographic fixtures, local loopback HTTPS servers, TLS renewals, multi-host concurrency, and certificate callback diagnostics (81 tests passing with 94.2% code coverage).
+- Comprehensive unit and component test suite covering OpenSSL-verified cryptographic fixtures, local loopback HTTPS servers, TLS renewals, multi-host concurrency, WebCrypto Ed25519 payload verification, replay attack mitigation, and certificate callback diagnostics (97 tests passing with 93.2% code coverage).
 
 ## 1.0.1
 

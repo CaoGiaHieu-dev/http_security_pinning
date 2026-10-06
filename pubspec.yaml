@@ -10,8 +10,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
   asn1lib: ^1.6.5
   crypto: ^3.0.6
+  cryptography: ^2.7.0
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_lints: ^5.0.0
@@ -34,6 +38,9 @@ flutter:
         dartPluginClass: HttpSecurityPinningPlugin
       windows:
         dartPluginClass: HttpSecurityPinningPlugin
+      web:
+        pluginClass: HttpSecurityPinningWeb
+        fileName: src/web/web_plugin_registrar.dart
 
 false_secrets:
   - /test/fixtures/*.key
