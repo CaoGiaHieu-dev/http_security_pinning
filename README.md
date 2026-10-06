@@ -1,7 +1,7 @@
 # HttpSecurityPinning
 
 [![pub version](https://img.shields.io/pub/v/http_security_pinning.svg)](https://pub.dev/packages/http_security_pinning)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![license](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 A Flutter plugin providing a secure-by-default, production-ready `HttpClient` implementation with Subject Public Key Info (SPKI) SHA-256 certificate pinning.
 
@@ -345,4 +345,4 @@ On Flutter Web, the client expects the server to sign response payloads using an
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICENSE) file for details.

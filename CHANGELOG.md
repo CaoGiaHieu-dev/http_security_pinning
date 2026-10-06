@@ -8,6 +8,8 @@
   - Isolated native `dart:io` symbols from the public library entrypoint using clean conditional web stubs (`web_stub.dart`), ensuring 100% compatibility with Flutter Web and WASM runtimes.
 - **Documentation Polish**:
   - Completed documentation comments for all public constructors and properties across caching and web security exception classes.
+- **License**:
+  - Adopted the BSD 3-Clause License to enforce strict author attribution and protect the author's copyright across all source distributions and derivative works.
 
 ## 1.2.0
 
