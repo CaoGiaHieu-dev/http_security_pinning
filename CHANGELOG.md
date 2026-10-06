@@ -1,3 +1,9 @@
+## 1.2.2
+
+### Licensing & Attribution
+- **Adopted BSD 3-Clause License**: Migrated from MIT License to the official BSD 3-Clause License to enforce strict author attribution, protect the author's copyright, and prohibit unauthorized name endorsement in derivative products.
+- **Source Code Copyright Headers**: Added standard Flutter/Dart SDK copyright headers across all Dart, Swift, Objective-C, and Java source files.
+
 ## 1.2.1
 
 ### Platform Support & Score Improvements

@@ -1,3 +1,7 @@
+// Copyright (c) 2025-2026 Cao Gia Hiếu <caogiahieu99@gmail.com>. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 /// A secure-by-default HTTP client for Dart and Flutter with certificate
 /// pinning against Subject Public Key Info (SPKI) SHA-256 hashes and
 /// Application-Layer Public Key Pinning on Flutter Web.
