@@ -1,3 +1,14 @@
+## 1.2.1
+
+### Platform Support & Score Improvements
+- **Swift Package Manager (SPM) on iOS**:
+  - Added modern Swift Package Manager support (`ios/http_security_pinning/Package.swift`) conforming to Flutter 3.44+ specifications and pub.dev requirements.
+  - Reorganized iOS native sources to `Sources/http_security_pinning/` and configured dual compatibility for both SPM and CocoaPods.
+- **Web & WebAssembly (WASM) Compatibility**:
+  - Isolated native `dart:io` symbols from the public library entrypoint using clean conditional web stubs (`web_stub.dart`), ensuring 100% compatibility with Flutter Web and WASM runtimes.
+- **Documentation Polish**:
+  - Completed documentation comments for all public constructors and properties across caching and web security exception classes.
+
 ## 1.2.0
 
 ### New Features & Cross-Platform Support (Flutter Web)
