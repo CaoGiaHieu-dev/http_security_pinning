@@ -1,7 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="dev.hieucg.http_security_pinning">
-
-  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-  <uses-permission android:name="android.permission.INTERNET"/>
-
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- The certificate probe opens a TLS connection to the pinned host. -->
+  <uses-permission android:name="android.permission.INTERNET" />
 </manifest>

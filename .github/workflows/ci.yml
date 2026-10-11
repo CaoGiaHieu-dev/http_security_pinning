@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dart:
+    name: Analyze, unit tests, README snippets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test tool
+      - run: flutter analyze
+      - run: flutter test
+      - run: dart run tool/check_readme_snippets.dart
+      - run: dart pub publish --dry-run
+
+  minimum-versions:
+    name: Lowest supported Flutter and dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.x
+          channel: stable
+      - run: flutter pub downgrade
+      - run: flutter analyze lib test
+      - run: flutter test
+
+  web:
+    name: Web tests (Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter test --platform chrome test/web
+
+  android:
+    name: Android build, JUnit and Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - working-directory: example
+        run: flutter build apk --debug
+      - working-directory: example/android
+        run: ./gradlew :http_security_pinning:testDebugUnitTest :http_security_pinning:lintDebug
+
+  ios:
+    name: iOS build and XCTest
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - working-directory: example
+        run: flutter build ios --simulator --debug
+      - working-directory: example/ios
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j \
+            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['name'] for k,v in d.items() if 'iOS' in k for x in v))")
+          xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
+            -destination "platform=iOS Simulator,name=$DEVICE" CODE_SIGNING_ALLOWED=NO
+
+  integration-android:
+    name: Integration tests (Android emulator in CI)
+    runs-on: ubuntu-latest
+    needs: android
+    # Talks to public hosts (github.com, badssl.com): informative, not gating.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          script: cd example && flutter test integration_test

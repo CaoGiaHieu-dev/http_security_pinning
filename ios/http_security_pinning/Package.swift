@@ -10,12 +10,13 @@ import PackageDescription
 let package = Package(
     name: "http_security_pinning",
     platforms: [
-        .iOS("12.0")
+        .iOS("13.0")
     ],
     products: [
         .library(name: "http-security-pinning", targets: ["http_security_pinning"])
     ],
     dependencies: [
+        // Requires Flutter 3.41 or newer (see pubspec.yaml).
         .package(name: "FlutterFramework", path: "../FlutterFramework")
     ],
     targets: [
@@ -24,7 +25,9 @@ let package = Package(
             dependencies: [
                 .product(name: "FlutterFramework", package: "FlutterFramework")
             ],
-            publicHeadersPath: "include"
+            resources: [
+                .process("PrivacyInfo.xcprivacy")
+            ]
         )
     ]
 )

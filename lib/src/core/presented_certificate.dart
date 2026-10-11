@@ -39,7 +39,7 @@ class PresentedCertificate implements X509Certificate {
 
   /// Creates a [PresentedCertificate] from raw [der] bytes.
   factory PresentedCertificate.fromDer(Uint8List der) {
-    final sha1Digest = Uint8List.fromList(cryptoSha1.convert(der).bytes);
+    final sha1Digest = Uint8List.fromList(_sha1Hash.convert(der).bytes);
     final pemString = derToPem(der);
 
     String subjectStr = 'UNKNOWN';
@@ -165,5 +165,5 @@ class PresentedCertificate implements X509Certificate {
   }
 }
 
-// Alias for crypto sha1
-const cryptoSha1 = sha1;
+// package:crypto's sha1, aliased because X509Certificate.sha1 shadows it.
+const _sha1Hash = sha1;

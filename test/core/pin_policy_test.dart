@@ -1,3 +1,7 @@
+// Copyright (c) 2025-2026 Cao Gia Hiếu <caogiahieu99@gmail.com>. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http_security_pinning/http_security_pinning.dart';
 
@@ -13,9 +17,8 @@ void main() {
         expect(policy.pinsFor('api.other.com'), equals({pinA}));
       });
 
-      test('empty pins returns null (unpinned)', () {
-        final policy = PinPolicy.uniform([]);
-        expect(policy.pinsFor('example.com'), isNull);
+      test('empty pins are rejected instead of disabling pinning', () {
+        expect(() => PinPolicy.uniform([]), throwsArgumentError);
       });
     });
 

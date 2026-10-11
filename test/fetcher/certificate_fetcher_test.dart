@@ -1,3 +1,7 @@
+// Copyright (c) 2025-2026 Cao Gia Hiếu <caogiahieu99@gmail.com>. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 import 'dart:async';
 
 import 'package:flutter/services.dart';
@@ -23,7 +27,8 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (MethodCall call) async {
         if (call.method == 'fetchHostCertificates') {
-          expect(call.arguments['url'], targetUrl.toString());
+          // Only the origin is sent to the platform.
+          expect(call.arguments['url'], 'https://example.com/');
           expect(call.arguments['host'], 'example.com');
           expect(call.arguments['port'], 443);
           expect(call.arguments['timeout'], 5000);
@@ -41,6 +46,57 @@ void main() {
       expect(chain.length, 2);
       expect(chain[0], fakeCert1);
       expect(chain[1], fakeCert2);
+    });
+
+    test('sends only the origin and rounds sub-millisecond timeouts up',
+        () async {
+      Map<Object?, Object?>? args;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (MethodCall call) async {
+        args = call.arguments as Map<Object?, Object?>;
+        return [
+          Uint8List.fromList([1])
+        ];
+      });
+
+      await MethodChannelCertificateFetcher(channel).fetchChain(
+        Uri.parse('https://user:secret@example.com:8443/p/a?token=x#f'),
+        const Duration(microseconds: 10),
+      );
+      expect(args!['url'], 'https://example.com:8443/');
+      expect(args!['timeout'], 1);
+
+      await MethodChannelCertificateFetcher(channel).fetchChain(
+          Uri.parse('https://Bücher.DE./'), const Duration(seconds: 1));
+      expect(args!['host'], 'xn--bcher-kva.de');
+      expect(args!['url'], 'https://xn--bcher-kva.de/');
+    });
+
+    test('forwards the proxy to the platform', () async {
+      Map<Object?, Object?>? args;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (MethodCall call) async {
+        args = call.arguments as Map<Object?, Object?>;
+        return [
+          Uint8List.fromList([1])
+        ];
+      });
+      await MethodChannelCertificateFetcher(channel).fetchChainThroughProxy(
+        targetUrl,
+        const Duration(seconds: 1),
+        ProxyDirective.parse('PROXY u:p@proxy.local:3128')!,
+      );
+      expect(args!['proxyHost'], 'proxy.local');
+      expect(args!['proxyPort'], 3128);
+      expect(args!['proxyAuthorization'], 'Basic dTpw');
+    });
+
+    test('rejects a non-positive timeout', () async {
+      await expectLater(
+        MethodChannelCertificateFetcher(channel)
+            .fetchChain(targetUrl, Duration.zero),
+        throwsArgumentError,
+      );
     });
 
     test(

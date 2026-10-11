@@ -4,135 +4,185 @@
 
 import 'dart:convert';
 import 'dart:typed_data';
+
 import 'package:cryptography/cryptography.dart';
 
 import 'exceptions.dart';
+import 'signature_base.dart';
 
-/// Cryptographic verifier that ensures response authenticity and integrity
-/// on Flutter Web using Ed25519 public key pinning and replay attack protection.
+/// Verifies `hsp-sig-v2` Ed25519 response signatures (see [SignatureBase]).
+///
+/// Used by the Flutter Web client, where browsers do not allow TLS pinning.
+/// It checks that a response was produced, for exactly the request that was
+/// sent, by a server holding one of the pinned Ed25519 private keys.
+///
+/// It does **not** provide confidentiality: requests and responses remain
+/// readable by anyone able to intercept TLS.
 class PayloadVerifier {
-  /// Header key for the Ed25519 digital signature in Base64.
-  static const defaultSignatureHeader = 'x-server-signature';
+  /// Response header carrying the base64 Ed25519 signature.
+  static const signatureHeader = 'x-hsp-signature';
 
-  /// Header key for the server generation timestamp in milliseconds since epoch.
-  static const defaultTimestampHeader = 'x-signature-timestamp';
+  /// Response header carrying the signing time (milliseconds since epoch).
+  static const createdHeader = 'x-hsp-created';
 
-  /// Optional header key for the cryptographic nonce.
-  static const defaultNonceHeader = 'x-signature-nonce';
+  /// Request header carrying the client nonce.
+  static const nonceHeader = 'x-hsp-nonce';
 
-  final SimplePublicKey _pinnedPublicKey;
-  final Duration timestampTolerance;
-  final String signatureHeader;
-  final String timestampHeader;
-  final String nonceHeader;
+  final List<SimplePublicKey> _publicKeys;
+
+  /// The accepted difference between the signing time and the client clock,
+  /// or `null` to skip the check (the nonce still binds each response to one
+  /// request).
+  final Duration? timestampTolerance;
+
   final Ed25519 _algorithm;
 
-  /// Creates a [PayloadVerifier] with the server's 32-byte Ed25519 [pinnedPublicKeyBytes].
+  /// Creates a verifier trusting the 32-byte Ed25519 [publicKeys].
+  ///
+  /// Configure the current key and the next one to rotate keys without
+  /// breaking deployed clients. Throws an [ArgumentError] if [publicKeys] is
+  /// empty or a key is not exactly 32 bytes.
   PayloadVerifier({
-    required List<int> pinnedPublicKeyBytes,
+    required List<List<int>> publicKeys,
     this.timestampTolerance = const Duration(minutes: 5),
-    this.signatureHeader = defaultSignatureHeader,
-    this.timestampHeader = defaultTimestampHeader,
-    this.nonceHeader = defaultNonceHeader,
     Ed25519? algorithm,
-  })  : _pinnedPublicKey = SimplePublicKey(
-          pinnedPublicKeyBytes,
-          type: KeyPairType.ed25519,
-        ),
-        _algorithm = algorithm ?? Ed25519();
+  })  : _publicKeys = List.unmodifiable(publicKeys.map(_toPublicKey)),
+        _algorithm = algorithm ?? Ed25519() {
+    if (_publicKeys.isEmpty) {
+      throw ArgumentError.value(
+          publicKeys, 'publicKeys', 'must contain at least one key');
+    }
+    if (timestampTolerance != null && timestampTolerance! < Duration.zero) {
+      throw ArgumentError.value(
+          timestampTolerance, 'timestampTolerance', 'must not be negative');
+    }
+  }
 
-  /// Creates a [PayloadVerifier] from a Base64-encoded Ed25519 public key string.
+  /// Creates a verifier from base64 (standard or URL-safe) encoded keys.
   factory PayloadVerifier.fromBase64(
-    String base64Key, {
-    Duration timestampTolerance = const Duration(minutes: 5),
-    String signatureHeader = defaultSignatureHeader,
-    String timestampHeader = defaultTimestampHeader,
-    String nonceHeader = defaultNonceHeader,
+    List<String> base64Keys, {
+    Duration? timestampTolerance = const Duration(minutes: 5),
   }) {
     return PayloadVerifier(
-      pinnedPublicKeyBytes: base64.decode(base64Key.trim()),
+      publicKeys: [for (final key in base64Keys) decodeBase64(key)],
       timestampTolerance: timestampTolerance,
-      signatureHeader: signatureHeader,
-      timestampHeader: timestampHeader,
-      nonceHeader: nonceHeader,
     );
   }
 
-  /// Verifies that [bodyBytes] matches the digital signature provided in [headers].
+  static SimplePublicKey _toPublicKey(List<int> bytes) {
+    if (bytes.length != 32) {
+      throw ArgumentError.value(bytes.length, 'publicKeys',
+          'an Ed25519 public key must be exactly 32 bytes');
+    }
+    return SimplePublicKey(List.unmodifiable(bytes), type: KeyPairType.ed25519);
+  }
+
+  /// Decodes standard or URL-safe base64, with or without padding.
+  static Uint8List decodeBase64(String value) {
+    var cleaned = value.trim().replaceAll('-', '+').replaceAll('_', '/');
+    final remainder = cleaned.length % 4;
+    if (remainder != 0) {
+      cleaned = cleaned.padRight(cleaned.length + 4 - remainder, '=');
+    }
+    return base64.decode(cleaned);
+  }
+
+  /// Verifies a response.
   ///
-  /// Throws [MissingSecurityHeaderException] if required headers are absent.
-  /// Throws [ReplayAttackException] if the timestamp exceeds [timestampTolerance].
-  /// Throws [SignatureVerificationException] if the cryptographic signature is invalid.
+  /// [method] and [url] describe the request as it was sent (a response
+  /// obtained through a redirect cannot be verified, since the redirect is not
+  /// signed, and must be refused), [nonce] is the value sent in
+  /// [nonceHeader], and
+  /// [statusCode], [headers] and [bodyBytes] describe the response.
+  ///
+  /// Throws a [MissingSecurityHeaderException], a
+  /// [MalformedSecurityHeaderException], a [ReplayAttackException] or a
+  /// [SignatureVerificationException]; any other failure of the
+  /// cryptographic library is reported as a [SignatureVerificationException].
   Future<void> verify({
-    required List<int> bodyBytes,
+    required String method,
+    required Uri url,
+    required int statusCode,
+    required String nonce,
     required Map<String, String> headers,
+    required List<int> bodyBytes,
     int? clientNowMs,
   }) async {
-    final sigValue = _getHeaderCaseInsensitive(headers, signatureHeader);
+    final sigValue = _header(headers, signatureHeader);
     if (sigValue == null || sigValue.trim().isEmpty) {
       throw MissingSecurityHeaderException(signatureHeader);
     }
-
-    final tsValue = _getHeaderCaseInsensitive(headers, timestampHeader);
-    if (tsValue == null || tsValue.trim().isEmpty) {
-      throw MissingSecurityHeaderException(timestampHeader);
+    final createdValue = _header(headers, createdHeader);
+    if (createdValue == null || createdValue.trim().isEmpty) {
+      throw MissingSecurityHeaderException(createdHeader);
     }
-
-    final serverTimestampMs = int.tryParse(tsValue.trim());
-    if (serverTimestampMs == null) {
+    final createdText = createdValue.trim();
+    final createdMs = RegExp(r'^[0-9]{1,16}$').hasMatch(createdText)
+        ? int.parse(createdText)
+        : null;
+    if (createdMs == null) {
       throw const MalformedSecurityHeaderException(
-        'Invalid timestamp format in header',
-      );
+          'Invalid X-HSP-Created value; expected milliseconds since epoch.');
+    }
+    if (nonce.trim().isEmpty) {
+      throw const MalformedSecurityHeaderException(
+          'The request nonce is empty.');
     }
 
-    // Verify replay protection window
-    final currentMs = clientNowMs ?? DateTime.now().millisecondsSinceEpoch;
-    final diff = (currentMs - serverTimestampMs).abs();
-    if (diff > timestampTolerance.inMilliseconds) {
-      throw ReplayAttackException(
-        serverTimestampMs: serverTimestampMs,
-        clientTimestampMs: currentMs,
-        tolerance: timestampTolerance,
-      );
+    final tolerance = timestampTolerance;
+    if (tolerance != null) {
+      final nowMs = clientNowMs ?? DateTime.now().millisecondsSinceEpoch;
+      if ((nowMs - createdMs).abs() > tolerance.inMilliseconds) {
+        throw ReplayAttackException(
+          serverTimestampMs: createdMs,
+          clientTimestampMs: nowMs,
+          tolerance: tolerance,
+        );
+      }
     }
-
-    // Construct data to verify: UTF-8(Timestamp) + UTF-8(Nonce) + BodyBytes
-    final nonceValue = _getHeaderCaseInsensitive(headers, nonceHeader);
-    final dataToVerify = <int>[
-      ...utf8.encode(tsValue.trim()),
-      if (nonceValue != null && nonceValue.isNotEmpty)
-        ...utf8.encode(nonceValue.trim()),
-      ...bodyBytes,
-    ];
 
     final Uint8List signatureBytes;
     try {
-      signatureBytes = base64.decode(sigValue.trim());
-    } catch (e) {
+      signatureBytes = decodeBase64(sigValue);
+    } on FormatException catch (e) {
       throw SignatureVerificationException(
-        'Failed to decode Base64 signature: $e',
-      );
+          'Signature is not valid base64: ${e.message}');
+    }
+    if (signatureBytes.length != 64) {
+      throw SignatureVerificationException(
+          'An Ed25519 signature must be 64 bytes, got ${signatureBytes.length}.');
     }
 
-    final isValid = await _algorithm.verify(
-      dataToVerify,
-      signature: Signature(signatureBytes, publicKey: _pinnedPublicKey),
+    final message = SignatureBase.build(
+      method: method,
+      url: url,
+      statusCode: statusCode,
+      nonce: nonce,
+      createdMs: createdMs,
+      contentType: _header(headers, 'content-type') ?? '',
+      bodyBytes: bodyBytes,
     );
 
-    if (!isValid) {
-      throw const SignatureVerificationException();
+    for (final key in _publicKeys) {
+      bool valid;
+      try {
+        valid = await _algorithm.verify(
+          message,
+          signature: Signature(signatureBytes, publicKey: key),
+        );
+      } catch (e) {
+        throw SignatureVerificationException(
+            'Signature could not be verified: $e');
+      }
+      if (valid) return;
     }
+    throw const SignatureVerificationException();
   }
 
-  static String? _getHeaderCaseInsensitive(
-    Map<String, String> headers,
-    String key,
-  ) {
+  static String? _header(Map<String, String> headers, String key) {
     final lowerKey = key.toLowerCase();
     for (final entry in headers.entries) {
-      if (entry.key.toLowerCase() == lowerKey) {
-        return entry.value;
-      }
+      if (entry.key.toLowerCase() == lowerKey) return entry.value;
     }
     return null;
   }
