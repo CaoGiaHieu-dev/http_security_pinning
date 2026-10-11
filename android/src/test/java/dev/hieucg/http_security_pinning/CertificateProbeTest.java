@@ -169,7 +169,8 @@ public class CertificateProbeTest {
 
     @Test
     public void aNonTlsServerIsAConnectionFailure() throws Exception {
-        try (TestServers.PlainHttpServer notTls = new TestServers.PlainHttpServer()) {
+        try (TestServers.MisbehavingServer notTls =
+                     new TestServers.MisbehavingServer(TestServers.Misbehaviour.PLAIN_HTTP)) {
             assertEquals("CONNECTION_FAILED", code(() -> probe.fetch(request(notTls.port(), 3000))));
         }
     }

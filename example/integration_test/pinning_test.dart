@@ -22,7 +22,7 @@ import 'package:integration_test/integration_test.dart';
 
 /// A valid pin that matches no real key.
 const _nonMatchingPin = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
-const _otherNonMatchingPin = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=';
+const _otherNonMatchingPin = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=';
 
 /// Returns the SPKI pins [url]'s server presents, leaf first.
 Future<List<String>> _discoverPins(Uri url) async {

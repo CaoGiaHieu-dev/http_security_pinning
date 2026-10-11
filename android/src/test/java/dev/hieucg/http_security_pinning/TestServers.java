@@ -24,17 +24,27 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SNIMatcher;
+import javax.net.ssl.SNIServerName;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
+import javax.net.ssl.StandardConstants;
 
-/** Local servers used by the native unit tests. */
+/**
+ * Real local servers used by the native unit tests: every test performs a
+ * genuine TCP connection and TLS handshake, without depending on the network.
+ */
 final class TestServers {
+
+    static final char[] P12_PASSWORD = "changeit".toCharArray();
 
     private TestServers() {}
 
@@ -51,37 +61,87 @@ final class TestServers {
         }
     }
 
+    /** Loads a PKCS#8 PEM private key (RSA or EC). */
     static PrivateKey loadKey(String pemFile) throws Exception {
         String pem = new String(Files.readAllBytes(fixture(pemFile).toPath()), StandardCharsets.US_ASCII)
                 .replaceAll("-----[^-]+-----", "")
                 .replaceAll("\\s", "");
-        byte[] der = Base64.getDecoder().decode(pem);
-        return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(der));
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(Base64.getDecoder().decode(pem));
+        try {
+            return KeyFactory.getInstance("RSA").generatePrivate(spec);
+        } catch (java.security.spec.InvalidKeySpecException notRsa) {
+            return KeyFactory.getInstance("EC").generatePrivate(spec);
+        }
+    }
+
+    /** A key store holding the PEM [chainPem] and [keyPem]. */
+    static KeyStore pemKeyStore(String chainPem, String keyPem) throws Exception {
+        List<Certificate> chain = loadChain(chainPem);
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(null, null);
+        keyStore.setKeyEntry("server", loadKey(keyPem), P12_PASSWORD, chain.toArray(new Certificate[0]));
+        return keyStore;
+    }
+
+    /** A PKCS#12 key store fixture (password "changeit"). */
+    static KeyStore p12KeyStore(String p12File) throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        try (InputStream in = new FileInputStream(fixture(p12File))) {
+            keyStore.load(in, P12_PASSWORD);
+        }
+        return keyStore;
+    }
+
+    /** The certificate chain stored in [keyStore], leaf first. */
+    static List<byte[]> encodedChain(KeyStore keyStore) throws Exception {
+        String alias = Collections.list(keyStore.aliases()).get(0);
+        List<byte[]> encoded = new ArrayList<>();
+        for (Certificate certificate : keyStore.getCertificateChain(alias)) {
+            encoded.add(certificate.getEncoded());
+        }
+        return encoded;
     }
 
     /**
-     * A TLS server that records how many handshakes completed and how many
-     * application bytes it received.
+     * A TLS server that records completed handshakes, received application
+     * bytes and the SNI names the clients sent.
      */
     static final class TlsServer implements AutoCloseable {
         final SSLServerSocket serverSocket;
         final AtomicInteger completedHandshakes = new AtomicInteger();
         final AtomicInteger applicationBytes = new AtomicInteger();
-        private final Thread thread;
+        final List<String> sniNames = new CopyOnWriteArrayList<>();
+        final AtomicInteger connections = new AtomicInteger();
 
         TlsServer(String chainPem, String keyPem) throws Exception {
-            List<Certificate> chain = loadChain(chainPem);
-            KeyStore keyStore = KeyStore.getInstance("PKCS12");
-            keyStore.load(null, null);
-            keyStore.setKeyEntry("server", loadKey(keyPem), new char[0],
-                    chain.toArray(new Certificate[0]));
+            this(pemKeyStore(chainPem, keyPem), null, false, InetAddress.getLoopbackAddress());
+        }
+
+        /**
+         * @param protocols       TLS versions to enable (null: defaults).
+         * @param needClientAuth  whether the server requires a client certificate.
+         */
+        TlsServer(KeyStore keyStore, String[] protocols, boolean needClientAuth, InetAddress address)
+                throws Exception {
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            kmf.init(keyStore, new char[0]);
+            kmf.init(keyStore, P12_PASSWORD);
             SSLContext context = SSLContext.getInstance("TLS");
             context.init(kmf.getKeyManagers(), null, null);
             serverSocket = (SSLServerSocket) context.getServerSocketFactory()
-                    .createServerSocket(0, 50, InetAddress.getLoopbackAddress());
-            thread = new Thread(this::serve, "test-tls-server");
+                    .createServerSocket(0, 50, address);
+            SSLParameters parameters = serverSocket.getSSLParameters();
+            parameters.setSNIMatchers(Collections.<SNIMatcher>singletonList(
+                    new SNIMatcher(StandardConstants.SNI_HOST_NAME) {
+                        @Override
+                        public boolean matches(SNIServerName serverName) {
+                            sniNames.add(new String(serverName.getEncoded(), StandardCharsets.US_ASCII));
+                            return true;
+                        }
+                    }));
+            if (protocols != null) parameters.setProtocols(protocols);
+            parameters.setNeedClientAuth(needClientAuth);
+            serverSocket.setSSLParameters(parameters);
+            Thread thread = new Thread(this::serve, "test-tls-server");
             thread.setDaemon(true);
             thread.start();
         }
@@ -92,20 +152,83 @@ final class TestServers {
 
         private void serve() {
             while (!serverSocket.isClosed()) {
-                try (SSLSocket socket = (SSLSocket) serverSocket.accept()) {
-                    socket.setSoTimeout(5000);
-                    try {
-                        socket.startHandshake();
-                        completedHandshakes.incrementAndGet();
-                        int n = socket.getInputStream().read(new byte[1024]);
-                        if (n > 0) applicationBytes.addAndGet(n);
-                    } catch (IOException expected) {
-                        // The probe aborts the handshake.
-                    }
+                try {
+                    final SSLSocket socket = (SSLSocket) serverSocket.accept();
+                    connections.incrementAndGet();
+                    Thread handler = new Thread(() -> handle(socket));
+                    handler.setDaemon(true);
+                    handler.start();
                 } catch (IOException e) {
                     return;
                 }
             }
+        }
+
+        private void handle(SSLSocket socket) {
+            try (SSLSocket s = socket) {
+                s.setSoTimeout(5000);
+                s.startHandshake();
+                completedHandshakes.incrementAndGet();
+                int n = s.getInputStream().read(new byte[1024]);
+                if (n > 0) applicationBytes.addAndGet(n);
+            } catch (IOException expected) {
+                // The probe aborts the handshake.
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            serverSocket.close();
+        }
+    }
+
+    /** How a {@link MisbehavingServer} treats each connection. */
+    enum Misbehaviour {
+        /** Accept and close at once (FIN). */
+        CLOSE_IMMEDIATELY,
+        /** Accept and reset the connection (RST). */
+        RESET,
+        /** Answer with an HTTP error instead of TLS. */
+        PLAIN_HTTP,
+    }
+
+    /** A TCP server that never completes a TLS handshake. */
+    static final class MisbehavingServer implements AutoCloseable {
+        final ServerSocket serverSocket;
+
+        MisbehavingServer(Misbehaviour misbehaviour) throws IOException {
+            serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+            Thread thread = new Thread(() -> {
+                while (!serverSocket.isClosed()) {
+                    try {
+                        Socket socket = serverSocket.accept();
+                        switch (misbehaviour) {
+                            case CLOSE_IMMEDIATELY:
+                                socket.close();
+                                break;
+                            case RESET:
+                                socket.setSoLinger(true, 0);
+                                socket.close();
+                                break;
+                            case PLAIN_HTTP:
+                                socket.getOutputStream().write(
+                                        "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"
+                                                .getBytes(StandardCharsets.ISO_8859_1));
+                                socket.getOutputStream().flush();
+                                socket.close();
+                                break;
+                        }
+                    } catch (IOException e) {
+                        return;
+                    }
+                }
+            }, "test-misbehaving-server");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        int port() {
+            return serverSocket.getLocalPort();
         }
 
         @Override
@@ -159,36 +282,14 @@ final class TestServers {
         }
     }
 
-    /** A plain-text server that answers every connection with an HTTP error. */
-    static final class PlainHttpServer implements AutoCloseable {
-        final ServerSocket serverSocket;
-
-        PlainHttpServer() throws IOException {
-            serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
-            Thread thread = new Thread(() -> {
-                while (!serverSocket.isClosed()) {
-                    try (Socket socket = serverSocket.accept()) {
-                        socket.getOutputStream().write(
-                                "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"
-                                        .getBytes(StandardCharsets.ISO_8859_1));
-                        socket.getOutputStream().flush();
-                    } catch (IOException e) {
-                        return;
-                    }
-                }
-            }, "test-plain-server");
-            thread.setDaemon(true);
-            thread.start();
-        }
-
-        int port() {
-            return serverSocket.getLocalPort();
-        }
-
-        @Override
-        public void close() throws IOException {
-            serverSocket.close();
-        }
+    /** How a {@link ConnectProxy} answers a CONNECT request. */
+    enum ProxyMode {
+        /** Answer with the configured status line; tunnel on 200. */
+        REPLY,
+        /** Close the connection without answering. */
+        CLOSE,
+        /** Send a never-ending response head. */
+        HUGE_HEAD,
     }
 
     /** A minimal HTTP CONNECT proxy that records the requests it receives. */
@@ -196,10 +297,16 @@ final class TestServers {
         final ServerSocket serverSocket;
         final List<String> requestHeads = new CopyOnWriteArrayList<>();
         private final String reply;
+        private final ProxyMode mode;
 
         /** @param reply the status line to answer, e.g. "HTTP/1.1 200 OK". */
         ConnectProxy(String reply) throws IOException {
+            this(reply, ProxyMode.REPLY);
+        }
+
+        ConnectProxy(String reply, ProxyMode mode) throws IOException {
             this.reply = reply;
+            this.mode = mode;
             serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
             Thread thread = new Thread(this::serve, "test-proxy");
             thread.setDaemon(true);
@@ -235,6 +342,19 @@ final class TestServers {
                 String text = head.toString("ISO-8859-1");
                 requestHeads.add(text);
                 OutputStream out = client.getOutputStream();
+                if (mode == ProxyMode.CLOSE) {
+                    client.close();
+                    return;
+                }
+                if (mode == ProxyMode.HUGE_HEAD) {
+                    out.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.ISO_8859_1));
+                    byte[] filler = "X-Filler: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n"
+                            .getBytes(StandardCharsets.ISO_8859_1);
+                    for (int i = 0; i < 2000; i++) out.write(filler);
+                    out.flush();
+                    client.close();
+                    return;
+                }
                 out.write((reply + "\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
                 out.flush();
                 if (!reply.contains(" 200 ")) {

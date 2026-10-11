@@ -652,11 +652,15 @@ Apple's guidance on identity pinning, and OWASP MASVS (MASVS-NETWORK-2).
 ## Testing
 
 ```bash
-flutter test                                  # Dart unit tests (VM)
-cd example && flutter test integration_test   # on an Android or iOS device, needs Internet
+flutter test   # Dart unit tests (VM), with real TLS servers on localhost
 ```
 
-Native tests:
+Native tests perform real TCP connections and TLS handshakes against local
+servers (expired, wrong-host, self-signed EC and untrusted-CA certificates,
+TLS 1.2 / 1.3, client-certificate servers, SNI, IPv6, servers that close,
+reset or never answer, CONNECT proxies that refuse, close or misbehave, and
+concurrent load), so they exercise the real probe code without depending on
+the Internet:
 
 ```bash
 # Android (JUnit), from example/android after `flutter build apk --debug`
@@ -669,6 +673,10 @@ xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner \
 
 `dart run tool/check_readme_snippets.dart` compiles every Dart snippet of this
 README against the package.
+
+The on-device tests in `example/integration_test` talk to public hosts
+(github.com, badssl.com); they are meant for manual runs on a device
+(`cd example && flutter test integration_test`) and are not part of CI.
 
 ---
 

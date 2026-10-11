@@ -112,6 +112,146 @@ class RunnerTests: XCTestCase {
     XCTAssertFalse(String(decoding: firstBytes, as: UTF8.self).hasPrefix("HEAD"))
   }
 
+  // MARK: Real proxy and server behaviour (local NWListener, no Internet)
+
+  /// A local TCP server: it records the request head (for CONNECT), answers
+  /// with `reply` (or closes at once when `reply` is nil) and, after a 200,
+  /// records the first bytes sent through the tunnel (the TLS ClientHello).
+  private final class FakeServer {
+    let listener: NWListener
+    private let queue = DispatchQueue(label: "fake-server")
+    private(set) var requestHead = ""
+    private(set) var tunnelBytes = Data()
+    let finished: XCTestExpectation
+
+    init(reply: String?, finished: XCTestExpectation) throws {
+      // NSURLSession may retry a failed connection.
+      finished.assertForOverFulfill = false
+      self.finished = finished
+      listener = try NWListener(using: .tcp, on: .any)
+      listener.newConnectionHandler = { [weak self] connection in
+        guard let self = self else { return }
+        connection.start(queue: self.queue)
+        guard let reply = reply else {
+          connection.cancel()
+          self.finished.fulfill()
+          return
+        }
+        self.readHead(connection, buffer: Data(), reply: reply)
+      }
+    }
+
+    func start(_ test: XCTestCase) {
+      let ready = test.expectation(description: "listener ready")
+      listener.stateUpdateHandler = { state in
+        if case .ready = state { ready.fulfill() }
+      }
+      listener.start(queue: queue)
+      test.wait(for: [ready], timeout: 5)
+    }
+
+    var port: Int { Int(listener.port!.rawValue) }
+
+    private func readHead(_ connection: NWConnection, buffer: Data, reply: String) {
+      connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, done, _ in
+        var buffer = buffer
+        if let data = data { buffer.append(data) }
+        let text = String(decoding: buffer, as: UTF8.self)
+        if text.contains("\r\n\r\n") {
+          self.requestHead = text
+          connection.send(content: Data("\(reply)\r\n\r\n".utf8), completion: .contentProcessed { _ in
+            if reply.contains(" 200 ") {
+              connection.receive(minimumIncompleteLength: 5, maximumLength: 16384) { hello, _, _, _ in
+                self.tunnelBytes = hello ?? Data()
+                connection.cancel()
+                self.finished.fulfill()
+              }
+            } else {
+              connection.cancel()
+              self.finished.fulfill()
+            }
+          })
+        } else if done {
+          connection.cancel()
+          self.finished.fulfill()
+        } else {
+          self.readHead(connection, buffer: buffer, reply: reply)
+        }
+      }
+    }
+  }
+
+  /// Extracts the SNI host name from a TLS ClientHello record, if any.
+  private static func serverName(inClientHello data: Data) -> String? {
+    let bytes = [UInt8](data)
+    func u16(_ i: Int) -> Int { Int(bytes[i]) << 8 | Int(bytes[i + 1]) }
+    guard bytes.count > 43, bytes[0] == 0x16, bytes[5] == 0x01 else { return nil }
+    var i = 5 + 4 + 2 + 32  // record header, handshake header, version, random
+    i += 1 + Int(bytes[i])  // session id
+    guard i + 2 <= bytes.count else { return nil }
+    i += 2 + u16(i)  // cipher suites
+    guard i + 1 <= bytes.count else { return nil }
+    i += 1 + Int(bytes[i])  // compression methods
+    guard i + 2 <= bytes.count else { return nil }
+    let end = min(bytes.count, i + 2 + u16(i))
+    i += 2
+    while i + 4 <= end {
+      let type = u16(i), length = u16(i + 2)
+      if type == 0, i + 9 <= end {  // server_name: list length, type, name length
+        let nameLength = u16(i + 7)
+        guard i + 9 + nameLength <= bytes.count else { return nil }
+        return String(decoding: bytes[(i + 9)..<(i + 9 + nameLength)], as: UTF8.self)
+      }
+      i += 4 + length
+    }
+    return nil
+  }
+
+  func testTheProxyTunnelCarriesConnectAndSni() throws {
+    let finished = expectation(description: "tunnel used")
+    let proxy = try FakeServer(reply: "HTTP/1.1 200 Connection established", finished: finished)
+    proxy.start(self)
+    defer { proxy.listener.cancel() }
+
+    let outcome = call([
+      "host": "service.example.test", "port": 443, "timeout": 3000,
+      "proxyHost": "127.0.0.1", "proxyPort": proxy.port,
+    ])
+    wait(for: [finished], timeout: 5)
+    // The tunnel is closed after the ClientHello: no chain, an error.
+    XCTAssertNotNil(errorCode(outcome))
+    XCTAssertTrue(proxy.requestHead.hasPrefix("CONNECT service.example.test:443 HTTP/1.1\r\n"),
+                  proxy.requestHead)
+    XCTAssertEqual(proxy.tunnelBytes.first, 0x16)
+    XCTAssertEqual(Self.serverName(inClientHello: proxy.tunnelBytes), "service.example.test")
+  }
+
+  func testARefusedTunnelIsAConnectionFailure() throws {
+    let finished = expectation(description: "refused")
+    let proxy = try FakeServer(reply: "HTTP/1.1 502 Bad Gateway", finished: finished)
+    proxy.start(self)
+    defer { proxy.listener.cancel() }
+
+    let outcome = call([
+      "host": "service.example.test", "port": 443, "timeout": 3000,
+      "proxyHost": "127.0.0.1", "proxyPort": proxy.port,
+    ])
+    wait(for: [finished], timeout: 5)
+    XCTAssertNotNil(errorCode(outcome))
+    XCTAssertNotEqual(errorCode(outcome), "INVALID_ARGS")
+  }
+
+  func testAServerClosingImmediatelyIsAConnectionFailure() throws {
+    let finished = expectation(description: "closed")
+    let server = try FakeServer(reply: nil, finished: finished)
+    server.start(self)
+    defer { server.listener.cancel() }
+
+    let outcome = call(["host": "127.0.0.1", "port": server.port, "timeout": 3000])
+    wait(for: [finished], timeout: 5)
+    XCTAssertEqual(errorCode(outcome), "CONNECTION_FAILED")
+  }
+
   func testFetchesTheChainOfAPublicHost() throws {
     let outcome = call(["host": "www.apple.com", "port": 443, "timeout": 10000], timeout: 20)
     if let error = outcome as? FlutterError {

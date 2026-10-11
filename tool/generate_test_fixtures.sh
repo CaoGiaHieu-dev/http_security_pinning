@@ -18,6 +18,9 @@
 #   v1.pem                                X.509 **version 1** certificate (no version field, no extensions)
 #   trailing_dot_ca.pem                   a separate "rogue" CA (tests trust it to simulate a mis-issuing CA)
 #   trailing_dot_chain.pem / .key         leaf for the trailing-dot name "localhost." issued by that CA
+#   expired.p12, wrong_host.p12           PKCS#12 keystores (password "changeit") used by the Android
+#                                         JUnit tests: an expired localhost cert, a cert for wrong.example
+#                                         (need `keytool` from a JDK)
 #   pins.json                             SPKI SHA-256 pins computed independently with OpenSSL
 #
 # All keys are throw-away test keys. NEVER use them for anything else.
@@ -107,6 +110,11 @@ extendedKeyUsage=serverAuth
 subjectAltName=DNS:localhost.
 ' > "$TMP/dot.ext"
 ossl x509 -req -in "$TMP/dot.csr" -CA "$OUT/trailing_dot_ca.pem" -CAkey "$TMP/rogue.key"   -set_serial 3001 -out "$OUT/trailing_dot_chain.pem" -days $DAYS -extfile "$TMP/dot.ext"
+
+# --- PKCS#12 keystores for the native (JUnit) tests ----------------------------
+rm -f "$OUT/expired.p12" "$OUT/wrong_host.p12"
+keytool -genkeypair -alias server -keyalg RSA -keysize 2048 -dname "CN=localhost"   -ext "SAN=dns:localhost,ip:127.0.0.1" -startdate 2000/01/01 -validity 1   -storetype PKCS12 -keystore "$OUT/expired.p12" -storepass changeit -keypass changeit
+keytool -genkeypair -alias server -keyalg RSA -keysize 2048 -dname "CN=wrong.example"   -ext "SAN=dns:wrong.example" -validity $DAYS   -storetype PKCS12 -keystore "$OUT/wrong_host.p12" -storepass changeit -keypass changeit
 
 # --- Ground-truth SPKI pins (computed by OpenSSL, not by the package) --------
 pin() {

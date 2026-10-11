@@ -125,10 +125,15 @@ contains **breaking changes**; read the migration guide below.
 - Regression tests for every audit finding (redirects, empty pins, scheme
   reuse, trailing dots, `connectionFactory`, callback bypass, proxies, web
   signature tampering, replay, retries, limits).
-- Native tests: Android JUnit (`CertificateProbeTest`,
-  `HttpSecurityPinningPluginTest`) and iOS XCTest (`example/ios/RunnerTests`).
+- Native tests with real TCP/TLS connections to local servers: Android JUnit
+  (`CertificateProbeTest`, `CertificateProbeRealCasesTest`,
+  `HttpSecurityPinningPluginTest`: expired, wrong-host, EC and untrusted-CA
+  certificates, TLS 1.2/1.3, client-auth servers, SNI, IPv6, closed, reset
+  and silent servers, misbehaving proxies, concurrent load) and iOS XCTest
+  (`example/ios/RunnerTests`: CONNECT and SNI through a local proxy, refused
+  tunnels, closed servers, deadlines, concurrency).
 - Rotation-proof integration tests that discover the pins of public hosts
-  before pinning them.
+  before pinning them (manual, on a device; not run in CI).
 
 ## 1.2.2 - 2026-10-06
 

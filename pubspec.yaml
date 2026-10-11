@@ -53,3 +53,4 @@ flutter:
 
 false_secrets:
   - /test/fixtures/*.key
+  - /test/fixtures/*.p12

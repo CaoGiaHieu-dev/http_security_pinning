@@ -84,6 +84,58 @@ public class HttpSecurityPinningPluginTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void returnsTheChainOfAnExpiredCertificateThroughAProxy() throws Exception {
+        java.security.KeyStore keyStore = TestServers.p12KeyStore("expired.p12");
+        try (TestServers.TlsServer server = new TestServers.TlsServer(
+                keyStore, null, false, java.net.InetAddress.getLoopbackAddress());
+             TestServers.ConnectProxy proxy =
+                     new TestServers.ConnectProxy("HTTP/1.1 200 Connection established")) {
+            Map<String, Object> args = new HashMap<>();
+            args.put("host", "pinned.example.test");
+            args.put("port", server.port());
+            args.put("timeout", 5000);
+            args.put("proxyHost", "127.0.0.1");
+            args.put("proxyPort", proxy.port());
+            MethodChannel.Result result = mock(MethodChannel.Result.class);
+            HttpSecurityPinningPlugin.handleFetch(
+                    probe, new MethodCall("fetchHostCertificates", args), result);
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+            verify(result).success(captor.capture());
+            List<byte[]> chain = (List<byte[]>) captor.getValue();
+            org.junit.Assert.assertArrayEquals(
+                    TestServers.encodedChain(keyStore).get(0), chain.get(0));
+        }
+    }
+
+    @Test
+    public void aRefusedTunnelIsReportedAsConnectionFailed() throws Exception {
+        try (TestServers.ConnectProxy proxy =
+                     new TestServers.ConnectProxy("HTTP/1.1 407 Proxy Authentication Required")) {
+            Map<String, Object> args = new HashMap<>();
+            args.put("host", "pinned.example.test");
+            args.put("port", 443);
+            args.put("timeout", 3000);
+            args.put("proxyHost", "127.0.0.1");
+            args.put("proxyPort", proxy.port());
+            MethodChannel.Result result = mock(MethodChannel.Result.class);
+            HttpSecurityPinningPlugin.handleFetch(
+                    probe, new MethodCall("fetchHostCertificates", args), result);
+            verify(result).error(eq("CONNECTION_FAILED"), anyString(), isNull());
+        }
+    }
+
+    @Test
+    public void aSlowServerIsReportedAsTimeout() throws Exception {
+        try (TestServers.SlowLorisServer slow = new TestServers.SlowLorisServer(300)) {
+            MethodChannel.Result result = mock(MethodChannel.Result.class);
+            HttpSecurityPinningPlugin.handleFetch(
+                    probe, fetchCall("localhost", slow.port(), 800), result);
+            verify(result).error(eq("TIMEOUT"), anyString(), isNull());
+        }
+    }
+
+    @Test
     public void errorsDoNotLeakRawExceptionMessages() throws Exception {
         MethodChannel.Result result = mock(MethodChannel.Result.class);
         HttpSecurityPinningPlugin.handleFetch(probe,

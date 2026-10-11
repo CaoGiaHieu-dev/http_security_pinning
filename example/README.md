@@ -11,7 +11,8 @@ A small app that pins HTTPS requests made with `package:http` and `package:dio`.
 
 ## Tests
 
-On-device integration tests (Android or iOS device; need Internet access):
+On-device integration tests (Android or iOS device; need Internet access;
+manual only, not run in CI):
 
 ```bash
 flutter test integration_test
