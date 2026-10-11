@@ -2,11 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/// Platform registrar for desktop platforms (Windows, Linux, macOS).
+/// Plugin entry point required by Flutter's plugin registration on Windows,
+/// Linux and macOS (`dartPluginClass` in pubspec.yaml).
+///
+/// It does nothing: on desktop the certificate probe is implemented in pure
+/// Dart (`DartIoCertificateFetcher`), so there is nothing to register. Apps
+/// never need to use this class.
 class HttpSecurityPinningPlugin {
   /// Default constructor for [HttpSecurityPinningPlugin].
   const HttpSecurityPinningPlugin();
 
-  /// Registers the plugin for desktop platforms.
+  /// Called by the generated plugin registrant; intentionally empty.
   static void registerWith() {}
 }

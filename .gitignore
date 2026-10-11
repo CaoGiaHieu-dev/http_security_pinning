@@ -73,3 +73,7 @@ firebase_options_*.dart
 firebase_options.dart
 firebase.json
 google-services.json
+# Machine-specific Android SDK paths
+local.properties
+**/android/.gradle/
+**/android/build/

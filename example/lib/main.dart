@@ -1,3 +1,7 @@
+// Copyright (c) 2025-2026 Cao Gia Hiếu <caogiahieu99@gmail.com>. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart' show IOHttpClientAdapter;
 import 'package:flutter/material.dart';
@@ -17,7 +21,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Http Security Pinning Example',
       theme: ThemeData(
-        primarySwatch: Colors.blue,
+        colorSchemeSeed: Colors.blue,
         useMaterial3: true,
         inputDecorationTheme: const InputDecorationTheme(
           border: OutlineInputBorder(),
@@ -37,18 +41,48 @@ class PinningHomePage extends StatefulWidget {
 
 class _PinningHomePageState extends State<PinningHomePage> {
   final _urlController = TextEditingController(text: 'https://github.com');
-  final _pinController = TextEditingController(
-    text:
-        '/wiL5vgOLgwED41WS0DNF8QiTBVR/P41Kd163tmFxK0=', // Active pin for github.com
-  );
+  // Pins change whenever a server rotates its keys: use "Discover pins" to
+  // read the current ones. Always configure at least two (primary + backup).
+  final _pinController = TextEditingController();
   final _timeoutController = TextEditingController(text: '10');
   final _retryCountController = TextEditingController(text: '2');
 
-  String _result = 'Ready to make a request.';
+  /// A syntactically valid pin that matches no real key; used to discover
+  /// the pins a server presents.
+  static const _discoveryPin = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+  String _result = 'Discover the pins of a host, then make a pinned request.';
   bool _isLoading = false;
 
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _pinController.dispose();
+    _timeoutController.dispose();
+    _retryCountController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _discoverPins() async {
+    await _executeRequest(() async {
+      final client = HttpSecurityPinningClient([_discoveryPin]);
+      try {
+        await (await client.getUrl(Uri.parse(_urlController.text))).close();
+        return 'Unexpected: the discovery pin matched.';
+      } on NoValidPinsFoundException catch (e) {
+        _pinController.text = e.observedPins.join(', ');
+        return 'Pins presented by ${e.host} (leaf first):\n'
+            '${e.observedPins.join('\n')}\n\n'
+            'Verify them out of band (e.g. with openssl) before shipping them, '
+            'and add a backup pin for a key you control.';
+      } finally {
+        client.close(force: true);
+      }
+    });
+  }
+
   Future<void> _makeRequestWithHttp() async {
-    _executeRequest(() async {
+    await _executeRequest(() async {
       final client = IOClient(
         HttpSecurityPinningClient(
           _getHashes(),
@@ -56,25 +90,37 @@ class _PinningHomePageState extends State<PinningHomePage> {
           retryCount: _getRetryCount(),
         ),
       );
-
-      final response = await client.get(Uri.parse(_urlController.text));
-      return 'SUCCESS with http!\nStatus code: ${response.statusCode}\nBody length: ${response.body.length}';
+      try {
+        final response = await client.get(Uri.parse(_urlController.text));
+        return 'SUCCESS with http!\nStatus code: ${response.statusCode}\n'
+            'Body length: ${response.body.length}';
+      } finally {
+        client.close();
+      }
     });
   }
 
   Future<void> _makeRequestWithDio() async {
-    _executeRequest(() async {
+    await _executeRequest(() async {
+      final pins = _getHashes();
       final dio = Dio();
       (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
         return HttpSecurityPinningClient(
-          _getHashes(),
+          pins,
           timeout: _getTimeout(),
           retryCount: _getRetryCount(),
         );
       };
-
-      final response = await dio.get(_urlController.text);
-      return 'SUCCESS with dio!\nStatus code: ${response.statusCode}\nData length: ${response.data.toString().length}';
+      try {
+        final response = await dio.get<String>(_urlController.text);
+        return 'SUCCESS with dio!\nStatus code: ${response.statusCode}\n'
+            'Data length: ${response.data?.length ?? 0}';
+      } on DioException catch (e) {
+        // Dio wraps errors; the pinning exception is in `error`.
+        throw e.error ?? e;
+      } finally {
+        dio.close(force: true);
+      }
     });
   }
 
@@ -86,32 +132,31 @@ class _PinningHomePageState extends State<PinningHomePage> {
       _result = 'Loading...';
     });
 
+    String result;
     try {
-      final result = await request();
-      setState(() {
-        _result = result;
-      });
+      result = await request();
+    } on ArgumentError catch (e) {
+      result = 'CONFIGURATION ERROR:\n${e.message}';
     } catch (e) {
-      setState(() {
-        _result = 'ERROR:\n$e';
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      result = 'ERROR:\n$e';
     }
+    if (!mounted) return;
+    setState(() {
+      _result = result;
+      _isLoading = false;
+    });
   }
 
-  List<String> _getHashes() {
-    final text = _pinController.text.trim();
-    if (text.isEmpty) return [];
-    return text.split(',').map((e) => e.trim()).toList();
-  }
+  List<String> _getHashes() => _pinController.text
+      .split(',')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
 
   Duration _getTimeout() =>
       Duration(seconds: int.tryParse(_timeoutController.text) ?? 10);
 
-  int _getRetryCount() => int.tryParse(_retryCountController.text) ?? 3;
+  int _getRetryCount() => int.tryParse(_retryCountController.text) ?? 2;
 
   @override
   Widget build(BuildContext context) {
@@ -130,7 +175,7 @@ class _PinningHomePageState extends State<PinningHomePage> {
             TextField(
               controller: _pinController,
               decoration: const InputDecoration(
-                labelText: 'SPKI SHA-256 Pins (comma-separated)',
+                labelText: 'SPKI SHA-256 pins (comma-separated, at least two)',
               ),
             ),
             const SizedBox(height: 16),
@@ -150,7 +195,7 @@ class _PinningHomePageState extends State<PinningHomePage> {
                 Expanded(
                   child: TextField(
                     controller: _retryCountController,
-                    decoration: const InputDecoration(labelText: 'Retry Count'),
+                    decoration: const InputDecoration(labelText: 'Retry count'),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   ),
@@ -158,14 +203,19 @@ class _PinningHomePageState extends State<PinningHomePage> {
               ],
             ),
             const SizedBox(height: 24),
+            OutlinedButton(
+              onPressed: _isLoading ? null : _discoverPins,
+              child: const Text('Discover pins'),
+            ),
+            const SizedBox(height: 12),
             ElevatedButton(
               onPressed: _isLoading ? null : _makeRequestWithHttp,
-              child: const Text('Make Request with http'),
+              child: const Text('Make request with http'),
             ),
             const SizedBox(height: 12),
             ElevatedButton(
               onPressed: _isLoading ? null : _makeRequestWithDio,
-              child: const Text('Make Request with dio'),
+              child: const Text('Make request with dio'),
             ),
             const SizedBox(height: 24),
             Text('Result:', style: Theme.of(context).textTheme.headlineSmall),
@@ -177,7 +227,7 @@ class _PinningHomePageState extends State<PinningHomePage> {
                   border: Border.all(color: Colors.grey.shade400),
                   borderRadius: BorderRadius.circular(8.0),
                 ),
-                child: SingleChildScrollView(child: Text(_result)),
+                child: SingleChildScrollView(child: SelectableText(_result)),
               ),
             ),
           ],

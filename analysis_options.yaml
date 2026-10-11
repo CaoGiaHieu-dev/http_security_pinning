@@ -17,3 +17,4 @@ linter:
     - prefer_const_declarations
     - prefer_const_literals_to_create_immutables
     - directives_ordering
+    - public_member_api_docs
