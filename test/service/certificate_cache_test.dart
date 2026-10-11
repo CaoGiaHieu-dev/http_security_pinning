@@ -1,3 +1,7 @@
+// Copyright (c) 2025-2026 Cao Gia Hiếu <caogiahieu99@gmail.com>. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -18,6 +22,46 @@ void main() {
       expect(CertificateChainCache.keyFor(uri1), 'api.example.com:443');
       expect(CertificateChainCache.keyFor(uri1),
           equals(CertificateChainCache.keyFor(uri2)));
+    });
+
+    test('keyFor normalizes trailing dots and IDN hosts', () {
+      expect(CertificateChainCache.keyFor(Uri.parse('https://localhost.:8443')),
+          'localhost:8443');
+      expect(CertificateChainCache.keyFor(Uri.parse('https://bücher.de/')),
+          'xn--bcher-kva.de:443');
+    });
+
+    test('entries expire after ttl', () async {
+      var now = DateTime(2026);
+      final ttlCache = CertificateChainCache(
+        ttl: const Duration(minutes: 10),
+        clock: () => now,
+      );
+      var fetchCount = 0;
+      Future<List<Uint8List>> fetch() async {
+        fetchCount++;
+        return [Uint8List(1)];
+      }
+
+      await ttlCache.getOrFetch('h:443', fetch);
+      now = now.add(const Duration(minutes: 9));
+      await ttlCache.getOrFetch('h:443', fetch);
+      expect(fetchCount, 1);
+      now = now.add(const Duration(minutes: 2));
+      expect(ttlCache.contains('h:443'), isFalse);
+      await ttlCache.getOrFetch('h:443', fetch);
+      expect(fetchCount, 2);
+    });
+
+    test('keeps at most maxEntries entries, evicting the oldest', () async {
+      final small = CertificateChainCache(maxEntries: 2);
+      Future<List<Uint8List>> fetch() async => [Uint8List(1)];
+      await small.getOrFetch('a:443', fetch);
+      await small.getOrFetch('b:443', fetch);
+      await small.getOrFetch('c:443', fetch);
+      expect(small.contains('a:443'), isFalse);
+      expect(small.contains('b:443'), isTrue);
+      expect(small.contains('c:443'), isTrue);
     });
 
     test('caches successful fetch result', () async {

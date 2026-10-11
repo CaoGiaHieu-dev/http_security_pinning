@@ -36,7 +36,7 @@ final class SpkiPin {
   /// Parses a pin string into an [SpkiPin].
   ///
   /// Accepts:
-  /// * standard base64 (e.g. `e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=`)
+  /// * standard base64 (e.g. `PRIMARY0PIN000000000000000000000000000000AA=`)
   /// * HPKP / OkHttp style `sha256/` or `sha256=` prefix
   /// * unpadded base64 and URL-safe base64
   factory SpkiPin.parse(String rawPin) {

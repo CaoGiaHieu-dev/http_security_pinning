@@ -1,348 +1,686 @@
-# HttpSecurityPinning
+# http_security_pinning
 
 [![pub version](https://img.shields.io/pub/v/http_security_pinning.svg)](https://pub.dev/packages/http_security_pinning)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
-A Flutter plugin providing a secure-by-default, production-ready `HttpClient` implementation with Subject Public Key Info (SPKI) SHA-256 certificate pinning.
+TLS certificate pinning for Flutter. `HttpSecurityPinningClient` is a drop-in
+`dart:io` `HttpClient` (usable with `package:http`, `package:dio` and
+`HttpOverrides`) that only completes a TLS connection when the server's
+public key matches one of your **SPKI SHA-256 pins**.
 
-This package defends your mobile and desktop applications against Man-In-The-Middle (MITM) attacks, rogue Certificate Authorities (CAs), and DNS spoofing by cryptographically verifying the server's public key before allowing HTTP traffic.
+On **Flutter Web**, where browsers do not allow TLS pinning, the package
+instead verifies **Ed25519 signatures on responses** made by your server. This
+is a different, weaker guarantee; read [Flutter Web](#flutter-web-response-signatures-not-tls-pinning)
+before relying on it.
 
----
-
-## Features
-
-- 🛡️ **SPKI SHA-256 Pinning**: Pins cryptographic public keys rather than full certificates. Survives certificate renewals when the same key pair or intermediate CA is used.
-- 🌐 **Cross-Platform Support**: Full certificate chain inspection on Android and iOS; leaf certificate pinning on Windows, macOS, and Linux out-of-the-box.
-- 🎯 **Per-Host & Wildcard Policies**: Configure distinct pins per host (e.g., `api.example.com`, `auth.example.com`) or wildcards (`*.example.com`).
-- ⚡ **Zero-Leakage Concurrency**: Thread-safe client connection pooling and in-flight request deduplication prevent socket leaks and duplicate handshakes.
-- 🔄 **Safe Dynamic Rotation**: Automatic TLS cache invalidation and retry if server certificate rotates during app runtime.
-- 🛠️ **Seamless Integration**: Drop-in replacement for `dart:io` `HttpClient`, fully compatible with `package:http`, `package:dio`, and `HttpOverrides.global`.
-- 🔍 **Diagnostics & Bad Certificate Callback**: Pin validation failures surface to `badCertificateCallback` with a `PresentedCertificate` object (implementing `dart:io` `X509Certificate`) for detailed logging and diagnostics. Controlled debug bypass via opt-in `honorBadCertificateCallback: true`.
-- ⏱️ **Exponential Backoff Retries**: Configurable timeouts and exponential backoff retry policy for flaky networks.
-
----
-
-## Supported Platforms
-
-| Platform | Support | Mechanism | Chain Depth |
-| :--- | :---: | :--- | :--- |
-| **Android** | ✅ API 21+ | Native TLS probe (`SSLSocket`) | Full chain (Leaf, Intermediate, Root) |
-| **iOS** | ✅ iOS 12.0+ | Native TLS probe (`NSURLSession` + `SecTrust`) | Full chain (Leaf, Intermediate, Root) |
-| **macOS** | ✅ macOS 10.15+ | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
-| **Windows** | ✅ Windows 10+ | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
-| **Linux** | ✅ Any modern distro | Pure-Dart `DartIoCertificateFetcher` | Leaf certificate |
-| **Web** | ✅ Supported | Application-Layer Ed25519 Public Key Pinning & Replay Protection | Payload & Response Signature |
-
-> [!NOTE]
-> On mobile and desktop platforms, pinning is enforced at the TLS socket level against SPKI hashes. On Flutter Web, where browser sandboxing abstracts the underlying TLS handshake, pinning is cryptographically enforced at the application layer via **Ed25519 Response Signature Verification** and replay protection.
->
-> `HttpSecurityPinningClient.isSupported` returns `true` across all platforms (Android, iOS, Windows, macOS, Linux, and Web).
+> [!WARNING]
+> Pinning trades flexibility for protection. If the server's keys change and
+> none of your pins matches any more, **every pinned request fails until users
+> install an app update**. Before you pin, read [Best practices](#best-practices),
+> always ship a backup pin, and make sure you control the keys you pin.
 
 ---
 
-## Getting Started
+## Contents
 
-Add the dependency to your `pubspec.yaml`:
+- [Platform support](#platform-support)
+- [Installation](#installation)
+- [Getting your pins](#getting-your-pins)
+- [Usage](#usage)
+- [How it works (security model)](#how-it-works-security-model)
+- [Flutter Web: response signatures, not TLS pinning](#flutter-web-response-signatures-not-tls-pinning)
+- [Debugging and `badCertificateCallback`](#debugging-and-badcertificatecallback)
+- [Error handling](#error-handling)
+- [Configuration reference](#configuration-reference)
+- [Best practices](#best-practices)
+- [Testing](#testing)
+
+---
+
+## Platform support
+
+| Platform | Mechanism | Certificates the pins are compared with |
+| :--- | :--- | :--- |
+| **Android** (API 24+) | Native TLS probe, then the `dart:io` request trusts only the matching certificates | The chain **the server sends**: leaf and intermediates. Servers rarely send their root, so do not rely on root pins. |
+| **iOS** (13+) | Native TLS probe (`NSURLSession` + `SecTrust`), then the same as Android | The chain **built by iOS**: leaf, intermediates and usually the root (which may come from the device trust store). |
+| **macOS, Windows, Linux** | Pure `dart:io` probe | **Only the leaf certificate.** Intermediate and root pins can never match on desktop. |
+| **Web** | No TLS pinning (browsers do not allow it). Ed25519 response-signature check (required unless explicitly disabled) | Not applicable: `HttpSecurityPinningClient.isSupported` is `false` on the web. |
+
+Pins configured for a host are therefore portable across platforms only if
+they include the **leaf key** (plus a backup key).
+
+---
+
+## Installation
 
 ```yaml
 dependencies:
-  http_security_pinning: ^1.1.0
+  http_security_pinning: ^2.0.0
 ```
 
-Then run:
+Requirements: Flutter 3.41 or newer, Android `minSdk` 24, iOS 13.
 
-```bash
-flutter pub get
-```
+Upgrading from 1.x? Version 2.0.0 contains breaking security fixes: see the
+[migration guide in the changelog](CHANGELOG.md#200).
 
 ---
 
-## Quick Start
+## Getting your pins
 
-### 1. Simple Single-Host Pinning
+A pin is the base64 SHA-256 digest of a certificate's DER encoded
+*SubjectPublicKeyInfo* (RFC 7469). `sha256/` prefixes and URL-safe or
+unpadded base64 are accepted too.
+
+### From the server, with OpenSSL
+
+```bash
+# Every certificate the server sends, leaf first, with its pin.
+openssl s_client -servername api.example.com -connect api.example.com:443 -showcerts </dev/null 2>/dev/null \
+  | awk '/BEGIN CERT/{n++} n>0 {print > ("cert" n ".pem")}'
+for f in cert*.pem; do
+  echo "$f: $(openssl x509 -in "$f" -noout -subject)"
+  openssl x509 -in "$f" -pubkey -noout | openssl pkey -pubin -outform der \
+    | openssl dgst -sha256 -binary | openssl enc -base64
+done
+```
+
+On Windows, run these commands in Git Bash (it ships OpenSSL).
+
+### For a backup key that is not deployed yet
+
+Generate the next key pair now, keep it offline, and pin it in the app so that
+you can switch to it without an app update:
+
+```bash
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out next.key
+openssl pkey -in next.key -pubout -outform der | openssl dgst -sha256 -binary | openssl enc -base64
+```
+
+### From the app (any build mode)
+
+Connect once with a pin that cannot match: the error lists what the server
+presented (`observedPins`, leaf first). Verify the values out of band (for
+example with OpenSSL) before shipping them.
 
 ```dart
-import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 import 'package:http_security_pinning/http_security_pinning.dart';
 
-void main() async {
-  // Pass one or more SPKI SHA-256 hashes (base64 or sha256/... format)
+Future<List<String>> discoverPins(Uri url) async {
   final client = HttpSecurityPinningClient([
-    'e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=', // Primary pin
-    'k2v657xBsOVe1PQR/JU7tNm+hmd2h0EtTV0mbJ5De+o=', // Backup / rotation pin
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', // matches nothing
   ]);
-
-  final ioClient = IOClient(client);
-
   try {
-    final response = await ioClient.get(Uri.parse('https://github.com'));
-    print('Status: ${response.statusCode}');
+    await (await client.getUrl(url)).close();
+    return const [];
+  } on NoValidPinsFoundException catch (e) {
+    return e.observedPins;
   } finally {
-    ioClient.close();
+    client.close(force: true);
   }
 }
 ```
 
+The example app has a **Discover pins** button doing exactly this.
+
 ---
 
-### 2. Multi-Host Pinning with Wildcards
+## Usage
 
-Use `HttpSecurityPinningClient.perHost` when your application communicates with multiple backends or third-party APIs:
+All pins and keys in the snippets below are **placeholders that match nothing**: replace them with your own values. Never copy a pin or key from documentation, tests or fixtures into an app: their private keys may be public.
+
+### With `package:http`
 
 ```dart
+import 'package:http/io_client.dart';
+import 'package:http_security_pinning/http_security_pinning.dart';
+
+Future<void> main() async {
+  final client = IOClient(HttpSecurityPinningClient([
+    'PRIMARY0PIN000000000000000000000000000000AA=', // your current key
+    'BACKUP00PIN000000000000000000000000000000AA=', // your backup key
+  ]));
+  try {
+    final response = await client.get(Uri.parse('https://api.example.com/'));
+    print(response.statusCode);
+  } finally {
+    client.close();
+  }
+}
+```
+
+An empty pin list throws an `ArgumentError`: it would disable pinning.
+
+### Several hosts, wildcards
+
+```dart
+import 'package:http_security_pinning/http_security_pinning.dart';
+
 final client = HttpSecurityPinningClient.perHost(
   {
-    // Exact host match
     'api.example.com': [
-      '6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY=',
+      'PRIMARY0PIN000000000000000000000000000000AA=',
+      'BACKUP00PIN000000000000000000000000000000AA=',
     ],
-    // Wildcard match for all subdomains
+    // Any depth of subdomain (a.cdn.example.com, a.b.cdn.example.com),
+    // but NOT cdn.example.com itself: list it separately if needed.
     '*.cdn.example.com': [
-      'eHDSOkYgiJphKpIaKaW52Pn7mp0HFI9Af8AuoVP4op8=',
+      'CDN0PRIMARY0000000000000000000000000000000A=',
+      'CDN0BACKUP00000000000000000000000000000000A=',
     ],
   },
-  allowUnpinnedHosts: false, // Default is false: blocks unpinned hosts
-  timeout: const Duration(seconds: 15),
-  retryCount: 2,
+  // false (default): other hosts throw UnpinnedHostException.
+  // true: other hosts use the normal system trust store, without pinning.
+  allowUnpinnedHosts: false,
 );
 ```
 
----
+Host names are compared case-insensitively, without a trailing dot, and
+internationalized names are compared in their punycode form.
 
-### 3. Usage with `Dio`
-
-For `dio` 5.x+, configure `createHttpClient` on `IOHttpClientAdapter`:
+### With `package:dio`
 
 ```dart
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:http_security_pinning/http_security_pinning.dart';
 
-void main() async {
+Future<void> main() async {
   final dio = Dio();
-
-  (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-    return HttpSecurityPinningClient([
-      'e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=',
-    ]);
-  };
-
-  final response = await dio.get('https://github.com');
-  print('Status code: ${response.statusCode}');
+  (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () =>
+      HttpSecurityPinningClient([
+        'PRIMARY0PIN000000000000000000000000000000AA=',
+        'BACKUP00PIN000000000000000000000000000000AA=',
+      ]);
+  try {
+    final response = await dio.get<String>('https://api.example.com/');
+    print(response.statusCode);
+  } on DioException catch (e) {
+    // Dio wraps errors: the pinning exception is in `e.error`.
+    if (e.error is NoValidPinsFoundException) print('Pin mismatch');
+    rethrow;
+  } finally {
+    dio.close();
+  }
 }
 ```
 
----
+### App-wide with `HttpOverrides`
 
-### 4. Global Pinning with `HttpOverrides`
-
-Apply SPKI pinning transparently across all `HttpClient` calls in your app (including image loading and third-party libraries) without modifying individual request call sites:
+`HttpOverrides.global` affects every `dart:io` `HttpClient` of the app
+(including `NetworkImage` and packages built on `dart:io`). Use a **per-host**
+policy with `allowUnpinnedHosts: true` so that hosts you do not pin (CDNs,
+analytics, map tiles) keep working:
 
 ```dart
 import 'dart:io';
-import 'package:flutter/material.dart';
+
 import 'package:http_security_pinning/http_security_pinning.dart';
 
-class SecureHttpOverrides extends HttpOverrides {
-  final List<String> pins;
-  SecureHttpOverrides(this.pins);
-
+class PinnedHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
-    return HttpSecurityPinningClient(
-      pins,
-      timeout: const Duration(seconds: 10),
-      retryCount: 2,
+    // `context` is ignored: pinned hosts use their own SecurityContext.
+    return HttpSecurityPinningClient.perHost(
+      {
+        'api.example.com': [
+          'PRIMARY0PIN000000000000000000000000000000AA=',
+          'BACKUP00PIN000000000000000000000000000000AA=',
+        ],
+      },
+      allowUnpinnedHosts: true,
     );
   }
 }
 
 void main() {
-  HttpOverrides.global = SecureHttpOverrides([
-    'e4wu8h9eLNeNUg6cVb5gGWM0PsiM9M3i3E32qKOkBwY=',
-  ]);
-
-  runApp(const MyApp());
+  HttpOverrides.global = PinnedHttpOverrides();
+  // runApp(...);
 }
 ```
 
-> [!NOTE]
-> `HttpSecurityPinningClient` internally isolates its internal connections from `HttpOverrides.global`, preventing infinite recursion / `StackOverflowError`.
+`HttpOverrides` does **not** affect native networking: WebViews,
+`cupertino_http`, `cronet_http`, Firebase and other native SDKs. Pin those
+with the platform's own mechanism (Android Network Security Config `pin-set`,
+iOS `NSPinnedDomains`).
 
----
+### One client for mobile, desktop and web
 
-## How to Obtain Your SPKI Hash
-
-### Option A: Using OpenSSL (Recommended)
-
-Run the following command in terminal to extract the leaf certificate's SPKI SHA-256 hash:
-
-```bash
-openssl s_client -servername example.com -connect example.com:443 </dev/null 2>/dev/null \
-  | openssl x509 -pubkey -noout \
-  | openssl pkey -pubin -outform der \
-  | openssl dgst -sha256 -binary \
-  | openssl enc -base64
-```
-
-### Option B: Automatic Hash Discovery via Debug Logs
-
-Run a test request with an empty pin list or a placeholder pin. In debug mode, `HttpSecurityPinningClient` prints the SPKI SHA-256 hashes of all certificates presented by the server:
-
-```text
-HttpSecurityPinning: Certificate chain for example.com:
-  [0] 6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY= (Leaf)
-  [1] eHDSOkYgiJphKpIaKaW52Pn7mp0HFI9Af8AuoVP4op8= (Intermediate)
-  [2] pkxmZ+2TONzz6JwpGl/qh+1XL7DIvPmWO4sa+yE2sY8= (Root)
-```
-
-Copy the desired hash into your configuration.
-
----
-
-## Handling `badCertificateCallback`
-
-When a server certificate fails SPKI verification or OS handshake verification, `HttpSecurityPinningClient` invokes `badCertificateCallback` with a `PresentedCertificate` object implementing `dart:io` `X509Certificate`.
-
-### Inspecting Failed Certificates for Diagnostics
-
-```dart
-final client = HttpSecurityPinningClient(['EXPECTED_PIN_HASH']);
-
-client.badCertificateCallback = (cert, host, port) {
-  print('Pinning failed for $host:$port');
-  print('Subject: ${cert.subject}');
-  print('Issuer: ${cert.issuer}');
-  print('Valid: ${cert.startValidity} to ${cert.endValidity}');
-  print('SHA-1: ${cert.sha1.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':')}');
-  print('PEM:\n${cert.pem}');
-
-  // By default, returning true or false here logs information,
-  // but connection STILL FAILS with NoValidPinsFoundException (secure-by-default).
-  return false;
-};
-```
-
-### Debug Bypass Mode (`honorBadCertificateCallback: true`)
-
-If you want `badCertificateCallback` return value to actually override pinning failure (e.g. in development environments or test proxies like Charles/Proxyman):
-
-```dart
-final client = HttpSecurityPinningClient(
-  ['EXPECTED_PIN_HASH'],
-  honorBadCertificateCallback: true, // ⚠️ Opt-in override
-);
-
-client.badCertificateCallback = (cert, host, port) {
-  // Return true ONLY for trusted local debug environments!
-  if (kDebugMode && host == 'staging.local') {
-    return true; // Connection allowed despite pin mismatch
-  }
-  return false; // Connection rejected
-};
-```
-
-> [!CAUTION]
-> Setting `honorBadCertificateCallback: true` and returning `true` completely disables MITM protection for that request. Never enable this unconditionally in release builds!
-
----
-
-## Error Handling
-
-All exceptions inherit from `CertificatePinningException`:
-
-```dart
-import 'package:http_security_pinning/http_security_pinning.dart';
-
-try {
-  final response = await client.getUrl(Uri.parse('https://example.com'));
-} on NoValidPinsFoundException catch (e) {
-  // MITM attack detected or pins are out of date!
-  print('Pin mismatch on ${e.host}:${e.port}');
-  print('Configured pins: ${e.expectedPins}');
-  print('Observed pins from server: ${e.observedPins}');
-} on CertificateFetchException catch (e) {
-  // Network failure or timeout while probing certificates
-  print('Failed to probe certificate: ${e.message} (Retryable: ${e.isRetryable})');
-} on UnpinnedHostException catch (e) {
-  // Host was not defined in perHost policy and allowUnpinnedHosts is false
-  print('Host ${e.host} is not allowed');
-} on InvalidPinException catch (e) {
-  // Malformed pin provided in configuration (e.g. wrong base64 length)
-  print('Invalid pin format: ${e.message}');
-} catch (e) {
-  print('Other error: $e');
-}
-```
-
----
-
-## Unified Cross-Platform Usage (`UniversalSecurityClient`)
-
-For applications running across **both Mobile/Desktop and Flutter Web**, `UniversalSecurityClient` provides a drop-in `http.Client` that automatically applies the correct cryptographic protection:
+`UniversalSecurityClient` returns an `http.Client` that pins TLS on Android,
+iOS and desktop, and verifies response signatures on the web:
 
 ```dart
 import 'package:http_security_pinning/http_security_pinning.dart';
 
 final client = UniversalSecurityClient.create(
-  // Native (Mobile & Desktop): TLS SPKI Pinning
+  // Android, iOS, desktop: required, TLS SPKI pinning.
   spkiPins: [
-    '6CyxBXGxfRqVy8AsRAT86co7plxc2K9B83J1bTyUqTY=',
+    'PRIMARY0PIN000000000000000000000000000000AA=',
+    'BACKUP00PIN000000000000000000000000000000AA=',
   ],
-  // Web: Server Ed25519 Public Key bytes (32 bytes)
-  serverPublicKeyBytes: [/* 32-byte Ed25519 public key */],
+  // Web: required, the server's Ed25519 public keys (32 bytes each).
+  serverPublicKeys: [
+    PayloadVerifier.decodeBase64('SERVER0KEY0CURRENT000000000000000000000000A='),
+  ],
 );
-
-// Works transparently on Android, iOS, Windows, macOS, Linux, and Web!
-final response = await client.get(Uri.parse('https://api.example.com/data'));
-print('Status: ${response.statusCode}');
 ```
 
-### Backend Setup for Web Support
-
-On Flutter Web, the client expects the server to sign response payloads using an Ed25519 private key:
-
-- `X-Server-Signature`: Base64-encoded 64-byte Ed25519 digital signature of `TimestampBytes + BodyBytes`.
-- `X-Signature-Timestamp`: Generation timestamp in milliseconds since epoch (e.g. `1728212400000`).
-- Ensure CORS exposes these headers: `Access-Control-Expose-Headers: X-Server-Signature, X-Signature-Timestamp`.
+Each platform throws an `ArgumentError` when the setting it relies on is
+missing, instead of silently sending unprotected requests.
 
 ---
 
-## Configuration Reference
+## How it works (security model)
 
-### `HttpSecurityPinningClient`
+For every request, `HttpSecurityPinningClient`:
 
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `pins` | `List<String>` | required | List of SPKI SHA-256 hashes for all hosts. |
-| `timeout` | `Duration` | `10s` | Network timeout for probing certificate chains. |
-| `retryCount` | `int` | `3` | Max retry attempts upon probe failure. |
-| `retryDelay` | `Duration` | `500ms` | Base exponential backoff delay between retries. |
-| `honorBadCertificateCallback` | `bool` | `false` | If `true`, returning `true` from `badCertificateCallback` bypasses pin mismatch. |
-| `onLog` | `void Function(String)?` | `null` | Optional custom logger callback. |
+1. **Checks the policy** for the target host: hosts not allowed by a per-host
+   policy throw `UnpinnedHostException`, and a non-HTTPS URL to a pinned host
+   throws `InsecureConnectionException`.
+2. **Probes the server's certificate chain** once per `host:port` (cached for
+   one hour by default, see `CertificateChainCache`). No request is ever sent
+   on the probe connection: Android, iOS and the desktop probe through a
+   proxy abort the TLS handshake as soon as the chain is known; the direct
+   desktop probe completes the handshake and closes the socket. When
+   `findProxy` (by default the `http_proxy` / `https_proxy` environment
+   variables, like `dart:io`) chooses a proxy, the probe goes through the
+   first proxy of the directive, without falling back to further entries.
+   Credentials embedded in the directive (`PROXY user:pass@host:port`) are
+   used; those set with `addProxyCredentials` are not.
+3. **Keeps only the certificates whose SPKI hash matches a pin**. No match:
+   `NoValidPinsFoundException` (fail closed).
+4. **Sends the request on a connection whose only trust anchors are those
+   certificates** (`SecurityContext(withTrustedRoots: false)`). The TLS
+   handshake still verifies the host name, the validity period and the
+   signatures up to the matched certificate, before any request byte is sent.
+   A different certificate presented on this connection, even one carrying a
+   pinned key with a forged issuer, is rejected.
 
-### `HttpSecurityPinningClient.perHost`
+Consequences worth knowing:
 
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `pinsByHost` | `Map<String, List<String>>` | required | Map of host patterns (`api.example.com` or `*.example.com`) to pins. |
-| `allowUnpinnedHosts` | `bool` | `false` | When `true`, requests to hosts not in `pinsByHost` bypass pinning instead of failing. |
-| `timeout` | `Duration` | `10s` | Network timeout for probing certificate chains. |
-| `retryCount` | `int` | `3` | Max retry attempts upon probe failure. |
-| `retryDelay` | `Duration` | `500ms` | Base exponential backoff delay between retries. |
-| `honorBadCertificateCallback` | `bool` | `false` | Debug bypass flag. |
+- **Pinning replaces the system CA check, it does not add to it.** A
+  certificate chaining to a pinned key is accepted even if the system does not
+  trust its root; revocation and Certificate Transparency are not checked.
+  Expired certificates and host name mismatches are still rejected.
+- **Redirects are followed by the client itself**, so every hop goes through
+  steps 1–4. A redirect from HTTPS to HTTP throws
+  `InsecureConnectionException`; a redirect to a host the policy does not
+  allow throws `UnpinnedHostException`. `abort()` reaches the hop in flight.
+  `Authorization`, `Proxy-Authorization` and cookies are dropped on
+  cross-origin redirects, like `dart:io` does, but **custom headers such as
+  `X-API-Key` are forwarded** to the next host the policy allows (with
+  `allowUnpinnedHosts: true` this can be an unpinned host, checked only by the
+  system trust store): set `followRedirects = false` on requests that carry
+  such secrets if your API may redirect to another host.
+- **A custom `connectionFactory`** must return a plain `Socket` for direct
+  HTTPS connections to pinned hosts: the client secures it with the pinned
+  context. A `SecureSocket` is refused, since how it was validated is
+  unknown. The probe does not use the factory.
+- **Host names** are normalized before the policy lookup: case, a trailing
+  dot, Unicode vs punycode and every spelling of an IP address
+  (`127.1`, `0x7f.0.0.1`, `[0:0:0:0:0:0:0:1]`) are equivalent. URLs whose host
+  contains characters that are not valid in a host name are refused with an
+  `ArgumentError`.
+- **Certificate renewal:** after a TLS failure the chain is probed again once
+  and the request retried. This helps only if the new key is already pinned.
+- **Failed probes** (network errors, timeouts) are retried `retryCount` times
+  with a linear delay (`retryDelay * attempt`). With the defaults, an
+  unreachable host fails after about 45 seconds (4 × 10 s plus delays); lower
+  `timeout` / `retryCount` for interactive requests.
+- Pinning only protects connections made through this client. It can be
+  bypassed on a rooted or jailbroken device by an attacker who controls the
+  device; treat it as defence in depth, not as protection of the client
+  itself.
 
 ---
 
-## Best Practices for Certificate Pinning
+## Flutter Web: response signatures, not TLS pinning
 
-1. **Always Pin Multiple Keys**: Pin at least the current leaf key and a backup intermediate or offline leaf key. This prevents application downtime during emergency certificate re-issuance.
-2. **Prefer SPKI Over Leaf Certificate Pinning**: SPKI hashes pin only the public key. When renewing your TLS certificate with the Certificate Signing Request (CSR) created with the same private key, the SPKI hash remains identical.
-3. **Use Per-Host Policies**: Separate pins for third-party endpoints (e.g. Payment Gateway, OAuth provider) from your own API endpoints.
+Browsers do not let applications inspect or constrain TLS connections.
+On the web, `HttpSecurityPinningClient` therefore **does not pin
+certificates** (the SPKI pins are only validated for syntax). Instead your
+server signs every response with an Ed25519 key, and the client verifies the
+signature with the public keys you configure.
+
+What this protects: the response body, status and content type, for the exact
+request that was sent (method, scheme, host, path and query, and a random
+per-request nonce), against modification or replay by intermediaries
+**between your signing server and the browser** (CDN, reverse proxy,
+TLS-inspecting middlebox). Other response headers are not signed. A response
+that the browser obtained by following a redirect is **refused**, because the
+redirect itself is not signed: call the final URL directly.
+
+What it does not protect: confidentiality (anyone able to intercept TLS can
+still read requests and responses, including tokens), the request itself, and
+an attacker who can modify the JavaScript bundle of your app.
+
+`timestampTolerance` only bounds how old a signature may be (in both
+directions, to tolerate clock skew); replay protection comes from the nonce.
+
+### Client
+
+```dart
+import 'package:http_security_pinning/http_security_pinning.dart';
+
+final client = UniversalSecurityClient.create(
+  spkiPins: ['PRIMARY0PIN000000000000000000000000000000AA=', 'BACKUP00PIN000000000000000000000000000000AA='],
+  serverPublicKeys: [
+    // Current key and the next one, so you can rotate without an update.
+    PayloadVerifier.decodeBase64('SERVER0KEY0CURRENT000000000000000000000000A='),
+    PayloadVerifier.decodeBase64('SERVER0KEY0NEXT000000000000000000000000000A='),
+  ],
+  // Accepted clock difference; null disables the check for users with a
+  // badly set clock (the nonce still prevents replays).
+  timestampTolerance: const Duration(minutes: 5),
+  maxResponseBytes: 10 * 1024 * 1024, // responses are buffered to be verified
+);
+```
+
+On the web, `HttpSecurityPinningClient.perHost` also accepts
+`serverPublicKeysByHost` (keys per host pattern). A host without keys throws
+`UnpinnedHostException`, unless `allowUnpinnedHosts: true`, in which case its
+responses pass through unverified (as a stream: neither `timeout` nor
+`maxResponseBytes` apply to their body). `allowUnverifiedResponses: true`
+lets hosts without keys pass unverified (hosts with keys are still verified);
+without any key it turns the check off explicitly. Internationalized host
+names must be written in punycode on the web: a non-ASCII host never passes
+unverified. These web-only parameters are accepted and ignored on other
+platforms, so the same code compiles everywhere.
+
+### The `hsp-sig-v2` signature
+
+1. The client sends a random nonce in the `X-HSP-Nonce` request header.
+2. The server builds the **signature base**: UTF-8 text, one line per
+   component, separated by `\n`, no trailing newline:
+
+   ```text
+   hsp-sig-v2
+   @method: GET
+   @scheme: https
+   @authority: api.example.com
+   @request-target: /users/42?expand=true
+   @status: 200
+   @nonce: AAECAwQFBgcICQoLDA0ODw
+   @created: 1760169600000
+   content-type: application/json
+   @body-sha256: F7TbBk4X9IeOORF35spiO3mJEfNAFLyeeJIJk9fdJ60=
+   ```
+
+   - `@method`: request method, upper case.
+   - `@scheme`: request scheme, lower case (`https`).
+   - `@authority`: lower-case host (punycode, no trailing dot, IPv6 in
+     brackets), plus `:port` only for a non-default port. Use the **public**
+     host the client called, not an internal one.
+   - `@request-target`: path (`/` if empty) and `?query` if the URL has one,
+     exactly as received on the wire (Node: `req.url`; Express:
+     `req.originalUrl`), not a decoded or rewritten path. Browsers send `'`
+     in a query as `%27`, and the client signs it that way.
+   - `@status`: response status code.
+   - `@nonce`: the `X-HSP-Nonce` request header.
+   - `@created`: signing time, milliseconds since the Unix epoch.
+   - `content-type`: the response `Content-Type` (trimmed), or empty. Sign
+     the exact value that is sent: some frameworks append `; charset=utf-8`
+     after your code runs.
+   - `@body-sha256`: base64 SHA-256 of the response body **as the browser
+     delivers it** (sign the uncompressed body; `HEAD` responses and empty
+     bodies hash the empty string).
+3. The server signs the base with Ed25519 and sends
+   `X-HSP-Signature: <base64 signature>` and `X-HSP-Created: <same time>`.
+
+The server must also:
+
+- answer CORS preflights with `Access-Control-Allow-Headers: X-HSP-Nonce`
+  and expose the signature with
+  `Access-Control-Expose-Headers: X-HSP-Signature, X-HSP-Created`;
+- send `Cache-Control: no-store` on signed responses (a cached response
+  carries the nonce of an earlier request and fails verification).
+
+Test vector, for checking a server implementation only (**never deploy
+this key**, its seed is public): Ed25519 seed `00 01 02 … 1f`, public key
+`A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=`, response body `{"id":42}`.
+The base above signs to
+`lqUamjCnsQgg1W1/HZmLh9Ew25fyPhoF75EH32Kk/J/Var13xKU7vTTByb//BzsrZlB91P/P1RMy9I+JEMpjDw==`.
+
+#### Node.js server
+
+```js
+import crypto from 'node:crypto';
+
+// PKCS#8 Ed25519 private key (keep it out of source control).
+const privateKey = crypto.createPrivateKey(process.env.HSP_PRIVATE_KEY_PEM);
+
+export function signResponse({ method, authority, requestTarget, nonce, status, contentType, body }) {
+  const created = Date.now();
+  const base = [
+    'hsp-sig-v2',
+    `@method: ${method.toUpperCase()}`,
+    '@scheme: https',
+    `@authority: ${authority}`,
+    `@request-target: ${requestTarget}`,
+    `@status: ${status}`,
+    `@nonce: ${nonce}`,
+    `@created: ${created}`,
+    `content-type: ${(contentType ?? '').trim()}`,
+    `@body-sha256: ${crypto.createHash('sha256').update(body ?? '').digest('base64')}`,
+  ].join('\n');
+  return {
+    'X-HSP-Signature': crypto.sign(null, Buffer.from(base, 'utf8'), privateKey).toString('base64'),
+    'X-HSP-Created': String(created),
+    'Cache-Control': 'no-store',
+  };
+}
+```
+
+#### Dart server or tests
+
+`ResponseSigner` is the reference implementation:
+
+```dart
+import 'dart:convert';
+
+import 'package:http_security_pinning/http_security_pinning.dart';
+
+Future<Map<String, String>> sign(List<int> seed32, String nonce) async {
+  final signer = await ResponseSigner.fromSeed(seed32);
+  return signer.sign(
+    method: 'GET',
+    url: Uri.parse('https://api.example.com/users/42'),
+    statusCode: 200,
+    nonce: nonce,
+    contentType: 'application/json',
+    bodyBytes: utf8.encode('{"id":42}'),
+  );
+}
+```
+
+---
+
+## Debugging and `badCertificateCallback`
+
+This section describes Android, iOS and desktop. On the web the callback has
+the signature `bool Function(Object error, String host, int port)` and
+receives the verification error; the same restrictions apply.
+
+`badCertificateCallback` is **notified** when a server's chain matches no pin
+(with a `PresentedCertificate`, which implements `X509Certificate` and also
+exposes `pem`) and when a TLS handshake fails. By default its return value is
+ignored and the request fails.
+
+```dart
+import 'package:http_security_pinning/http_security_pinning.dart';
+
+final client = HttpSecurityPinningClient([
+  'PRIMARY0PIN000000000000000000000000000000AA=',
+  'BACKUP00PIN000000000000000000000000000000AA=',
+])
+  ..badCertificateCallback = (cert, host, port) {
+    print('Rejected certificate for $host:$port: ${cert.subject}');
+    return false;
+  };
+```
+
+To inspect traffic with a debugging proxy (Charles, Proxyman, mitmproxy) you
+can let the callback accept a failed certificate:
+
+```dart
+import 'package:flutter/foundation.dart';
+import 'package:http_security_pinning/http_security_pinning.dart';
+
+final client = HttpSecurityPinningClient(
+  [
+    'PRIMARY0PIN000000000000000000000000000000AA=',
+    'BACKUP00PIN000000000000000000000000000000AA=',
+  ],
+  honorBadCertificateCallback: kDebugMode,
+)..badCertificateCallback = (cert, host, port) => host == 'staging.example.com';
+```
+
+The bypass is deliberately limited:
+
+- it is **ignored in release builds**,
+- it applies to **one request** (the callback is asked again next time; for
+  unpinned hosts a certificate accepted by the callback stays accepted for
+  the keep-alive connection, as in plain `dart:io`),
+- it never overrides a connection whose certificate matched a pin.
+
+---
+
+## Error handling
+
+Pinning and verification failures are `CertificatePinningException`s
+(table below). Other errors keep their usual types: `ArgumentError` for
+invalid configuration or URLs, `StateError` after `close()`,
+`RedirectException` when `maxRedirects` is exceeded or a `Location` header is
+invalid, and network errors such
+as `SocketException`, `HandshakeException`, `TimeoutException` or
+`http.ClientException` (including `ResponseTooLargeException` on the web).
+
+| Exception | Meaning |
+| :--- | :--- |
+| `NoValidPinsFoundException` | The server's chain matches no pin. `host`, `observedPins`, `presentedChain`, `leafOnly`. |
+| `CertificateFetchException` | The certificate probe failed (`code`, `isRetryable`). |
+| `UnpinnedHostException` | The host has no pins and the policy does not allow unpinned hosts. |
+| `InsecureConnectionException` | A non-HTTPS URL (or an HTTPS → HTTP redirect) to a pinned host. |
+| `InvalidPinException` | A configured pin is not a valid base64 SHA-256 digest. |
+| `CertificateFormatException` | A certificate could not be parsed. |
+| `WebSecurityException` (web) | `SignatureVerificationException`, `MissingSecurityHeaderException`, `MalformedSecurityHeaderException`, `ReplayAttackException`. |
+| `ResponseTooLargeException` (web, an `http.ClientException`) | The body exceeds `maxResponseBytes`. |
+
+```dart
+import 'package:http_security_pinning/http_security_pinning.dart';
+
+Future<void> fetch(HttpSecurityPinningClient client) async {
+  try {
+    final request = await client.getUrl(Uri.parse('https://api.example.com/'));
+    await (await request.close()).drain<void>();
+  } on NoValidPinsFoundException catch (e) {
+    // Possible interception, or outdated pins.
+    print('Pin mismatch for ${e.host}; server presented ${e.observedPins}');
+  } on CertificateFetchException catch (e) {
+    print('Probe failed: ${e.message} (code ${e.code}, retryable: ${e.isRetryable})');
+  } on UnpinnedHostException catch (e) {
+    print('Host ${e.host} is not allowed');
+  } on InsecureConnectionException catch (e) {
+    print('Refused cleartext request to ${e.url}');
+  }
+}
+```
+
+---
+
+## Configuration reference
+
+### `HttpSecurityPinningClient(pins, ...)` and `.perHost(pinsByHost, ...)`
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `spkiHashes` / `pinsByHost` | required | Pins for every host, or per host pattern. Must not be empty. |
+| `allowUnpinnedHosts` (`perHost`) | `false` | `true`: hosts without pins use normal TLS without pinning. |
+| `timeout` | 10 s | Timeout of one certificate probe. Must be positive. |
+| `retryCount` | 3 | Extra probe attempts after a failure. |
+| `retryDelay` | 200 ms | Base delay; attempt *n* waits `retryDelay * n`. |
+| `honorBadCertificateCallback` | `false` | Let `badCertificateCallback` accept one failed request (debug/profile builds only). |
+| `pinningService` | new, with the shared cache | Inject a custom fetcher or cache (tests). |
+| `serverPublicKeys`, `serverPublicKeysByHost`, `timestampTolerance`, `allowUnverifiedResponses`, `maxResponseBytes` | – | Used on the web only; ignored on other platforms. |
+
+### `UniversalSecurityClient.create(...)`
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `spkiPins` | – | Required on Android, iOS and desktop. |
+| `serverPublicKeys` | – | Required on the web unless `allowUnverifiedResponses`. |
+| `allowUnverifiedResponses` | `false` | Web: let responses from hosts without keys pass unverified. |
+| `timeout` | 10 s | Native: probe timeout. Web: deadline for a verified response, body included. |
+| `retryCount` / `retryDelay` | 3 / 200 ms | Native: probe retries. Web: retries of idempotent requests after network errors. |
+| `timestampTolerance` | 5 min | Web: accepted clock difference, `null` to disable. |
+| `maxResponseBytes` | 10 MiB | Web: largest body buffered for verification. |
+| `innerClient` | – | Web only (e.g. a `BrowserClient`). Must be `null` elsewhere. |
+
+---
+
+## Best practices
+
+These follow RFC 7469, the Android Network Security Configuration guide,
+Apple's guidance on identity pinning, and OWASP MASVS (MASVS-NETWORK-2).
+
+1. **Ask whether you need pinning.** Platform vendors recommend relying on
+   the system trust store unless you have a specific threat (for example
+   mis-issued certificates or user-installed CAs). Pinning adds an outage risk.
+2. **Always ship at least two pins**, one of them for a key that is **not
+   deployed yet** and kept offline (see
+   [backup key](#for-a-backup-key-that-is-not-deployed-yet)). The package
+   prints a debug warning when a host has a single pin.
+3. **Pin keys you control.** Do not pin third-party services (payment
+   providers, OAuth, CDNs, analytics): they rotate keys without notice.
+4. **Choose what to pin per platform.** An intermediate CA pin survives leaf
+   renewals on Android and iOS but never matches on desktop, where only the
+   leaf is visible. Pinning the leaf key works everywhere but requires reusing
+   the key on renewal (ACME clients generate a new key by default; use for
+   example `certbot --reuse-key`). Public certificate lifetimes are getting
+   shorter (47 days by 2029), so plan for frequent renewals.
+5. **Have a recovery path.** Ship pins with a remote configuration you can
+   update (fetched over a channel that does not depend on those pins), or a
+   kill switch, and keep the backup key's private half safe. Consider an
+   expiry date after which the app stops pinning, as Android's `pin-set
+   expiration` does, so that very old app versions cannot be bricked.
+6. **Test the failure.** Run the app through mitmproxy or Charles with its CA
+   installed on the device and check that pinned requests fail.
+7. **Cover other network stacks** (WebView, native SDKs) with Android
+   `pin-set` / iOS `NSPinnedDomains` if they talk to the same backend.
+
+---
+
+## Testing
+
+```bash
+flutter test   # Dart unit tests (VM), with real TLS servers on localhost
+```
+
+Native tests perform real TCP connections and TLS handshakes against local
+servers (expired, wrong-host, self-signed EC and untrusted-CA certificates,
+TLS 1.2 / 1.3, client-certificate servers, SNI, IPv6, servers that close,
+reset or never answer, CONNECT proxies that refuse, close or misbehave, and
+concurrent load), so they exercise the real probe code without depending on
+the Internet:
+
+```bash
+# Android (JUnit), from example/android after `flutter build apk --debug`
+./gradlew :http_security_pinning:testDebugUnitTest :http_security_pinning:lintDebug
+
+# iOS (XCTest, macOS), from example after `flutter build ios --config-only --simulator`
+xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner \
+  -destination 'platform=iOS Simulator,name=iPhone 16'
+```
+
+`dart run tool/check_readme_snippets.dart` compiles every Dart snippet of this
+README against the package.
+
+The on-device tests in `example/integration_test` talk to public hosts
+(github.com, badssl.com); they are meant for manual runs on a device
+(`cd example && flutter test integration_test`) and are not part of CI.
 
 ---
 
 ## License
 
-This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICENSE) file for details.
+BSD 3-Clause, see [LICENSE](LICENSE). Versions 1.0.0 to 1.2.1 were published
+under the MIT License.

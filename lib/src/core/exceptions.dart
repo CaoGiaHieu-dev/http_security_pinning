@@ -10,13 +10,14 @@ abstract class CertificatePinningException implements Exception {
   final String message;
 
   /// Creates a new certificate pinning exception.
-  CertificatePinningException(this.message);
+  const CertificatePinningException(this.message);
 
   @override
   String toString() => 'CertificatePinningException: $message';
 }
 
-/// Thrown when fetching the certificate chain from the native platform fails.
+/// Thrown when the certificate-chain probe fails (native probe on Android and
+/// iOS, `dart:io` probe on desktop).
 ///
 /// This can happen due to network errors, timeouts, or if the native
 /// code encounters an unexpected issue. The [message] property contains
@@ -57,14 +58,23 @@ class NoValidPinsFoundException extends CertificatePinningException {
   /// The DER encoded certificates the server presented, leaf first.
   final List<Uint8List> presentedChain;
 
+  /// Whether only the leaf certificate was visible to the probe (Windows,
+  /// macOS and Linux). On those platforms a pin of an intermediate or root CA
+  /// can never match.
+  final bool leafOnly;
+
   /// Creates a new "no valid pins found" exception.
   NoValidPinsFoundException(
     this.host, {
     this.observedPins = const [],
     this.presentedChain = const [],
+    this.leafOnly = false,
   }) : super(
           'No valid SPKI pins found for host: $host'
-          '${observedPins.isEmpty ? '' : ' (server presented: ${observedPins.join(', ')})'}',
+          '${observedPins.isEmpty ? '' : ' (server presented: ${observedPins.join(', ')})'}'
+          '${leafOnly ? '. Only the leaf certificate is visible on this '
+              'platform, so intermediate or root CA pins cannot match here; '
+              'pin the leaf key (and a backup key).' : ''}',
         );
 }
 
@@ -101,9 +111,10 @@ class UnpinnedHostException extends CertificatePinningException {
   /// The host that has no pins configured.
   final String host;
 
-  /// Creates a new unpinned host exception.
-  UnpinnedHostException(this.host)
-      : super('No SPKI pins are configured for host: $host');
+  /// Creates a new unpinned host exception. [what] names what is missing
+  /// (SPKI pins on native platforms, response-signing keys on the web).
+  UnpinnedHostException(this.host, {String what = 'SPKI pins'})
+      : super('No $what are configured for host: $host');
 }
 
 /// Thrown when a DER encoded certificate cannot be parsed to extract its
