@@ -33,6 +33,11 @@ class RunnerTests: XCTestCase {
     (outcome as? FlutterError)?.code
   }
 
+  private func describe(_ outcome: Any?) -> String {
+    guard let error = outcome as? FlutterError else { return String(describing: outcome) }
+    return "\(error.code): \(error.message ?? "")"
+  }
+
   func testUnknownMethodsAreNotImplemented() {
     let plugin = HttpSecurityPinningPlugin()
     let done = expectation(description: "result")
@@ -107,7 +112,7 @@ class RunnerTests: XCTestCase {
 
     let outcome = call(["host": "127.0.0.1", "port": Int(listener.port!.rawValue), "timeout": 3000])
     wait(for: [received], timeout: 5)
-    XCTAssertNotNil(errorCode(outcome))
+    XCTAssertNotNil(errorCode(outcome), describe(outcome))
     XCTAssertEqual(firstBytes.first, 0x16)
     XCTAssertFalse(String(decoding: firstBytes, as: UTF8.self).hasPrefix("HEAD"))
   }
@@ -249,7 +254,7 @@ class RunnerTests: XCTestCase {
 
     let outcome = call(["host": "127.0.0.1", "port": server.port, "timeout": 3000])
     wait(for: [finished], timeout: 5)
-    XCTAssertEqual(errorCode(outcome), "CONNECTION_FAILED")
+    XCTAssertEqual(errorCode(outcome), "CONNECTION_FAILED", describe(outcome))
   }
 
   func testFetchesTheChainOfAPublicHost() throws {

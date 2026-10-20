@@ -80,9 +80,17 @@ jobs:
           channel: stable
       - working-directory: example
         run: flutter build ios --simulator --debug
+      # Serial testing on one simulator: parallel clones keep the assertion
+      # messages out of the log and add minutes of clone launches.
       - working-directory: example/ios
         run: |
           DEVICE=$(xcrun simctl list devices available -j \
             | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['name'] for k,v in d.items() if 'iOS' in k for x in v))")
           xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
-            -destination "platform=iOS Simulator,name=$DEVICE" CODE_SIGNING_ALLOWED=NO
+            -destination "platform=iOS Simulator,name=$DEVICE" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO -resultBundlePath "$RUNNER_TEMP/RunnerTests.xcresult"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xctest-results
+          path: ${{ runner.temp }}/RunnerTests.xcresult
