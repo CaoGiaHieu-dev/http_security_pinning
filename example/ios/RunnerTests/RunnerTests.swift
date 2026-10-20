@@ -92,13 +92,19 @@ class RunnerTests: XCTestCase {
     // A plain TCP listener records what the probe sends: it must be a TLS
     // record (0x16), never a cleartext HTTP request.
     let listener = try NWListener(using: .tcp, on: .any)
+    let queue = DispatchQueue(label: "client-hello-listener")
     let received = expectation(description: "bytes")
-    var firstBytes = Data()
+    // NSURLSession retries the closed TLS connection: only the first one is
+    // recorded, and the retry must not fulfill the expectation again.
+    received.assertForOverFulfill = false
+    var firstBytes: Data?
     listener.newConnectionHandler = { connection in
-      connection.start(queue: .global())
+      connection.start(queue: queue)
       connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
-        firstBytes = data ?? Data()
-        received.fulfill()
+        if firstBytes == nil {
+          firstBytes = data ?? Data()
+          received.fulfill()
+        }
         connection.cancel()
       }
     }
@@ -106,15 +112,16 @@ class RunnerTests: XCTestCase {
     listener.stateUpdateHandler = { state in
       if case .ready = state { ready.fulfill() }
     }
-    listener.start(queue: .global())
+    listener.start(queue: queue)
     wait(for: [ready], timeout: 5)
     defer { listener.cancel() }
 
     let outcome = call(["host": "127.0.0.1", "port": Int(listener.port!.rawValue), "timeout": 3000])
     wait(for: [received], timeout: 5)
+    let bytes = queue.sync { firstBytes ?? Data() }
     XCTAssertNotNil(errorCode(outcome), describe(outcome))
-    XCTAssertEqual(firstBytes.first, 0x16)
-    XCTAssertFalse(String(decoding: firstBytes, as: UTF8.self).hasPrefix("HEAD"))
+    XCTAssertEqual(bytes.first, 0x16)
+    XCTAssertFalse(String(decoding: bytes, as: UTF8.self).hasPrefix("HEAD"))
   }
 
   // MARK: Real proxy and server behaviour (local NWListener, no Internet)
